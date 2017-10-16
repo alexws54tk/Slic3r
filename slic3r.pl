@@ -6,6 +6,7 @@ use warnings;
 BEGIN {
     use FindBin;
     use lib "$FindBin::Bin/lib";
+    use lib "$FindBin::Bin/../lib/slic3r-prusa3d";
     use local::lib '--no-create', "$FindBin::Bin/local-lib";
 }
 
