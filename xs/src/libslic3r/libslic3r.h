@@ -14,11 +14,11 @@
 #include <boost/thread.hpp>
 
 #define SLIC3R_FORK_NAME "Slic3r Prusa Edition"
-#define SLIC3R_VERSION "1.38.0.devel"
+#define SLIC3R_VERSION "1.39.0.devel"
 #define SLIC3R_BUILD "Gentoo"
 
-typedef long coord_t;
-typedef double coordf_t;
+typedef int32_t coord_t;
+typedef double  coordf_t;
 
 //FIXME This epsilon value is used for many non-related purposes:
 // For a threshold of a squared Euclidean distance,
@@ -36,7 +36,7 @@ typedef double coordf_t;
 #define PI 3.141592653589793238
 // When extruding a closed loop, the loop is interrupted and shortened a bit to reduce the seam.
 #define LOOP_CLIPPING_LENGTH_OVER_NOZZLE_DIAMETER 0.15
-// Maximum perimeter length for the loop to apply the small perimeter speed. 
+// Maximum perimeter length for the loop to apply the small perimeter speed.
 #define SMALL_PERIMETER_LENGTH (6.5 / SCALING_FACTOR) * 2 * PI
 #define INSET_OVERLAP_TOLERANCE 0.4
 // 3mm ring around the top / bottom / bridging areas.
@@ -102,7 +102,7 @@ inline std::string debug_out_path(const char *name, ...)
 
 namespace Slic3r {
 
-enum Axis { X=0, Y, Z };
+enum Axis { X=0, Y, Z, E, F, NUM_AXES };
 
 template <class T>
 inline void append_to(std::vector<T> &dst, const std::vector<T> &src)
@@ -163,11 +163,11 @@ static inline T clamp(const T low, const T high, const T value)
     return std::max(low, std::min(high, value));
 }
 
-template <typename T>
-static inline T lerp(const T a, const T b, const T t)
+template <typename T, typename Number>
+static inline T lerp(const T& a, const T& b, Number t)
 {
-    assert(t >= T(-EPSILON) && t <= T(1.+EPSILON));
-    return (1. - t) * a + t * b;
+    assert((t >= Number(-EPSILON)) && (t <= Number(1) + Number(EPSILON)));
+    return (Number(1) - t) * a + t * b;
 }
 
 } // namespace Slic3r

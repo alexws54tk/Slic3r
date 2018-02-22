@@ -26,6 +26,7 @@ include_directories(${LIBDIR}/libslic3r)
 if(WIN32)
     # BOOST_ALL_NO_LIB: Avoid the automatic linking of Boost libraries on Windows. Rather rely on explicit linking.
     add_definitions(-D_USE_MATH_DEFINES -D_WIN32 -DBOOST_ALL_NO_LIB)
+    # -D_ITERATOR_DEBUG_LEVEL)
 endif()
 
 add_definitions(-DwxUSE_UNICODE -D_UNICODE -DUNICODE)
@@ -63,6 +64,8 @@ add_library(libslic3r STATIC
     ${LIBDIR}/libslic3r/Fill/FillConcentric.hpp
     ${LIBDIR}/libslic3r/Fill/FillHoneycomb.cpp
     ${LIBDIR}/libslic3r/Fill/FillHoneycomb.hpp
+    ${LIBDIR}/libslic3r/Fill/FillGyroid.cpp
+    ${LIBDIR}/libslic3r/Fill/FillGyroid.hpp
     ${LIBDIR}/libslic3r/Fill/FillPlanePath.cpp
     ${LIBDIR}/libslic3r/Fill/FillPlanePath.hpp
     ${LIBDIR}/libslic3r/Fill/FillRectilinear.cpp
@@ -73,6 +76,8 @@ add_library(libslic3r STATIC
     ${LIBDIR}/libslic3r/Fill/FillRectilinear3.hpp
     ${LIBDIR}/libslic3r/Flow.cpp
     ${LIBDIR}/libslic3r/Flow.hpp
+    ${LIBDIR}/libslic3r/Format/3mf.cpp
+    ${LIBDIR}/libslic3r/Format/3mf.hpp
     ${LIBDIR}/libslic3r/Format/AMF.cpp
     ${LIBDIR}/libslic3r/Format/AMF.hpp
     ${LIBDIR}/libslic3r/Format/OBJ.cpp
@@ -89,6 +94,8 @@ add_library(libslic3r STATIC
     ${LIBDIR}/libslic3r/GCode/CoolingBuffer.hpp
     ${LIBDIR}/libslic3r/GCode/PressureEqualizer.cpp
     ${LIBDIR}/libslic3r/GCode/PressureEqualizer.hpp
+    ${LIBDIR}/libslic3r/GCode/PreviewData.cpp
+    ${LIBDIR}/libslic3r/GCode/PreviewData.hpp
     ${LIBDIR}/libslic3r/GCode/PrintExtents.cpp
     ${LIBDIR}/libslic3r/GCode/PrintExtents.hpp
     ${LIBDIR}/libslic3r/GCode/SpiralVase.cpp
@@ -162,14 +169,34 @@ add_library(libslic3r STATIC
 )
 
 add_library(libslic3r_gui STATIC
+    ${LIBDIR}/slic3r/GUI/AppConfig.cpp
+    ${LIBDIR}/slic3r/GUI/AppConfig.hpp
     ${LIBDIR}/slic3r/GUI/3DScene.cpp
     ${LIBDIR}/slic3r/GUI/3DScene.hpp
     ${LIBDIR}/slic3r/GUI/GLShader.cpp
     ${LIBDIR}/slic3r/GUI/GLShader.hpp
     ${LIBDIR}/slic3r/GUI/Preset.cpp
     ${LIBDIR}/slic3r/GUI/Preset.hpp
+    ${LIBDIR}/slic3r/GUI/PresetBundle.cpp
+    ${LIBDIR}/slic3r/GUI/PresetBundle.hpp
+    ${LIBDIR}/slic3r/GUI/PresetHints.cpp
+    ${LIBDIR}/slic3r/GUI/PresetHints.hpp
     ${LIBDIR}/slic3r/GUI/GUI.cpp
     ${LIBDIR}/slic3r/GUI/GUI.hpp
+    ${LIBDIR}/slic3r/GUI/Tab.cpp
+    ${LIBDIR}/slic3r/GUI/Tab.hpp
+    ${LIBDIR}/slic3r/GUI/TabIface.cpp
+    ${LIBDIR}/slic3r/GUI/TabIface.hpp
+    ${LIBDIR}/slic3r/GUI/Field.cpp
+    ${LIBDIR}/slic3r/GUI/Field.hpp
+    ${LIBDIR}/slic3r/GUI/OptionsGroup.cpp
+    ${LIBDIR}/slic3r/GUI/OptionsGroup.hpp
+    ${LIBDIR}/slic3r/GUI/BedShapeDialog.cpp
+    ${LIBDIR}/slic3r/GUI/BedShapeDialog.hpp
+    ${LIBDIR}/slic3r/GUI/2DBed.cpp
+    ${LIBDIR}/slic3r/GUI/2DBed.hpp
+    ${LIBDIR}/slic3r/GUI/wxExtensions.cpp
+    ${LIBDIR}/slic3r/GUI/wxExtensions.hpp
 )
 
 add_library(admesh STATIC
@@ -180,6 +207,18 @@ add_library(admesh STATIC
     ${LIBDIR}/admesh/stl_io.cpp
     ${LIBDIR}/admesh/stlinit.cpp
     ${LIBDIR}/admesh/util.cpp
+)
+
+add_library(miniz STATIC
+    ${LIBDIR}/miniz/miniz.h
+    ${LIBDIR}/miniz/miniz_common.h
+    ${LIBDIR}/miniz/miniz_tdef.h
+    ${LIBDIR}/miniz/miniz_tinfl.h
+    ${LIBDIR}/miniz/miniz_zip.h
+    ${LIBDIR}/miniz/miniz.cpp
+    ${LIBDIR}/miniz/miniz_tdef.cpp
+    ${LIBDIR}/miniz/miniz_tinfl.cpp
+    ${LIBDIR}/miniz/miniz_zip.cpp
 )
 
 add_library(clipper STATIC 
@@ -279,8 +318,10 @@ set(XS_XSP_FILES
     ${XSP_DIR}/GCodeSender.xsp
     ${XSP_DIR}/Geometry.xsp
     ${XSP_DIR}/GUI.xsp
+    ${XSP_DIR}/GUI_AppConfig.xsp
     ${XSP_DIR}/GUI_3DScene.xsp
     ${XSP_DIR}/GUI_Preset.xsp
+    ${XSP_DIR}/GUI_Tab.xsp
     ${XSP_DIR}/Layer.xsp
     ${XSP_DIR}/Line.xsp
     ${XSP_DIR}/Model.xsp
@@ -340,9 +381,9 @@ if(APPLE)
     # Ignore undefined symbols of the perl interpreter, they will be found in the caller image.
     target_link_libraries(XS "-undefined dynamic_lookup")
 endif()
-target_link_libraries(XS libslic3r libslic3r_gui admesh clipper nowide polypartition poly2tri)
-if(SLIC3R_DEBUG)
-    target_link_libraries(Shiny)
+target_link_libraries(XS libslic3r libslic3r_gui admesh miniz clipper nowide polypartition poly2tri)
+if(SLIC3R_PROFILE)
+    target_link_libraries(XS Shiny)
 endif()
 
 # Add the OpenGL and GLU libraries.
@@ -385,7 +426,7 @@ endif ()
 
 if (SLIC3R_PROFILE)
     message("Slic3r will be built with a Shiny invasive profiler")
-    target_compile_definitions(XS PRIVATE -DSLIC3R_PROFILE)
+    add_definitions(-DSLIC3R_PROFILE)
 endif ()
 
 if (SLIC3R_HAS_BROKEN_CROAK)
@@ -432,7 +473,7 @@ if(SLIC3R_STATIC)
     # Use boost libraries linked statically to the C++ runtime.
     # set(Boost_USE_STATIC_RUNTIME ON)
 endif()
-find_package(Boost REQUIRED COMPONENTS system filesystem thread log locale)
+find_package(Boost REQUIRED COMPONENTS system filesystem thread log locale regex)
 if(Boost_FOUND)
     include_directories(${Boost_INCLUDE_DIRS})
     target_link_libraries(XS ${Boost_LIBRARIES})
@@ -543,8 +584,8 @@ endif()
 # Create a slic3r executable
 add_executable(slic3r ${PROJECT_SOURCE_DIR}/src/slic3r.cpp)
 target_include_directories(XS PRIVATE src src/libslic3r)
-target_link_libraries(slic3r libslic3r libslic3r_gui admesh ${Boost_LIBRARIES} clipper ${EXPAT_LIBRARIES} ${GLEW_LIBRARIES} polypartition poly2tri ${TBB_LIBRARIES} ${wxWidgets_LIBRARIES})
-if(SLIC3R_DEBUG)
+target_link_libraries(slic3r libslic3r libslic3r_gui admesh miniz ${Boost_LIBRARIES} clipper ${EXPAT_LIBRARIES} ${GLEW_LIBRARIES} polypartition poly2tri ${TBB_LIBRARIES} ${wxWidgets_LIBRARIES})
+if(SLIC3R_PROFILE)
     target_link_libraries(Shiny)
 endif()
 if (APPLE)

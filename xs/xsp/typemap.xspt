@@ -155,6 +155,9 @@
 %typemap{Ref<GCode>}{simple};
 %typemap{Clone<GCode>}{simple};
 
+%typemap{GCodePreviewData*};
+%typemap{Ref<GCodePreviewData>}{simple};
+%typemap{Clone<GCodePreviewData>}{simple};
 
 %typemap{Points};
 %typemap{Pointfs};
@@ -191,6 +194,8 @@
 %typemap{ModelInstancePtrs*};
 %typemap{Ref<ModelInstancePtrs>}{simple};
 %typemap{Clone<ModelInstancePtrs>}{simple};
+%typemap{AppConfig*};
+%typemap{Ref<AppConfig>}{simple};
 %typemap{GLShader*};
 %typemap{Ref<GLShader>}{simple};
 %typemap{GLVolume*};
@@ -203,6 +208,10 @@
 %typemap{Ref<PresetCollection>}{simple};
 %typemap{PresetBundle*};
 %typemap{Ref<PresetBundle>}{simple};
+%typemap{PresetHints*};
+%typemap{Ref<PresetHints>}{simple};
+%typemap{TabIface*};
+%typemap{Ref<TabIface>}{simple};
 
 %typemap{PrintRegionPtrs*};
 %typemap{PrintObjectPtrs*};

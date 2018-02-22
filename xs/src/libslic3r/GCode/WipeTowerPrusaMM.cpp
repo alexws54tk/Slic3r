@@ -6,6 +6,8 @@
 #include <iostream>
 #include <vector>
 
+#include "Analyzer.hpp"
+
 #if defined(__linux) || defined(__GNUC__ )
 #include <strings.h>
 #endif /* __linux */
@@ -368,7 +370,7 @@ WipeTower::ToolChangeResult WipeTowerPrusaMM::prime(
 	// print_z of the first layer.
 	float 						first_layer_height, 
 	// Extruder indices, in the order to be primed. The last extruder will later print the wipe tower brim, print brim and the object.
-	std::vector<unsigned int> 	tools,
+	const std::vector<unsigned int> &tools,
 	// If true, the last priming are will be the same as the other priming areas, and the rest of the wipe will be performed inside the wipe tower.
 	// If false, the last priming are will be large enough to wipe the last extruder sufficiently.
 	bool 						last_wipe_inside_wipe_tower, 
@@ -418,6 +420,11 @@ WipeTower::ToolChangeResult WipeTowerPrusaMM::prime(
 		  .travel(cleaning_box.ld, 7200)
 	// Increase the extruder driver current to allow fast ramming.
 		  .set_extruder_trimpot(750);
+
+    // adds tag for analyzer
+    char buf[32];
+    sprintf(buf, ";%s%d\n", GCodeAnalyzer::Extrusion_Role_Tag.c_str(), erWipeTower);
+    writer.append(buf);
 
 	if (purpose == PURPOSE_EXTRUDE || purpose == PURPOSE_MOVE_TO_TOWER_AND_EXTRUDE) {
 		float y_end = 0.f;
@@ -554,6 +561,11 @@ WipeTower::ToolChangeResult WipeTowerPrusaMM::tool_change(unsigned int tool, boo
 		writer.set_initial_position(initial_position);
 	}
 
+    // adds tag for analyzer
+    char buf[32];
+    sprintf(buf, ";%s%d\n", GCodeAnalyzer::Extrusion_Role_Tag.c_str(), erWipeTower);
+    writer.append(buf);
+
 	if (purpose == PURPOSE_EXTRUDE || purpose == PURPOSE_MOVE_TO_TOWER_AND_EXTRUDE) {
 		// Increase the extruder driver current to allow fast ramming.
 		writer.set_extruder_trimpot(750);
@@ -579,7 +591,8 @@ WipeTower::ToolChangeResult WipeTowerPrusaMM::tool_change(unsigned int tool, boo
 				  .extrude(box.ld, 3200).extrude(box.rd)
 				  .extrude(box.ru).extrude(box.lu);
 			// Wipe the nozzle.
-			if (purpose == PURPOSE_MOVE_TO_TOWER_AND_EXTRUDE)
+			//if (purpose == PURPOSE_MOVE_TO_TOWER_AND_EXTRUDE)
+			// Always wipe the nozzle with a long wipe to reduce stringing when moving away from the wipe tower.
 				writer.travel(box.ru, 7200)
 			  		  .travel(box.lu);
 		} else
@@ -636,6 +649,11 @@ WipeTower::ToolChangeResult WipeTowerPrusaMM::toolchange_Brim(Purpose purpose, b
 	else 
 		writer.set_initial_position(initial_position);
 
+    // adds tag for analyzer
+    char buf[32];
+    sprintf(buf, ";%s%d\n", GCodeAnalyzer::Extrusion_Role_Tag.c_str(), erWipeTower);
+    writer.append(buf);
+
 	if (purpose == PURPOSE_EXTRUDE || purpose == PURPOSE_MOVE_TO_TOWER_AND_EXTRUDE) {
 		// Prime the extruder 10*m_perimeter_width left along the vertical edge of the wipe tower.
 		writer.extrude_explicit(wipeTower_box.ld - xy(m_perimeter_width * 6.f, 0), 
@@ -686,8 +704,9 @@ WipeTower::ToolChangeResult WipeTowerPrusaMM::toolchange_Brim(Purpose purpose, b
 		// Move to the front left corner.
 		writer.travel(wipeTower_box.ld, 7000);
 
-		if (purpose == PURPOSE_MOVE_TO_TOWER_AND_EXTRUDE)
+		//if (purpose == PURPOSE_MOVE_TO_TOWER_AND_EXTRUDE)
 			// Wipe along the front edge.
+		// Always wipe the nozzle with a long wipe to reduce stringing when moving away from the wipe tower.
 			writer.travel(wipeTower_box.rd)
 			      .travel(wipeTower_box.ld);
 			  
@@ -1004,8 +1023,10 @@ WipeTower::ToolChangeResult WipeTowerPrusaMM::finish_layer(Purpose purpose)
 				  .extrude(fill_box.rd + xy(- m_perimeter_width,       m_perimeter_width));
 		}
 
-		if (purpose == PURPOSE_MOVE_TO_TOWER_AND_EXTRUDE)
+		// if (purpose == PURPOSE_MOVE_TO_TOWER_AND_EXTRUDE)
+		if (true)
 	       	// Wipe along the front side of the current wiping box.
+			// Always wipe the nozzle with a long wipe to reduce stringing when moving away from the wipe tower.
 			writer.travel(fill_box.ld + xy(  m_perimeter_width, m_perimeter_width / 2), 7200)
 			  	  .travel(fill_box.rd + xy(- m_perimeter_width, m_perimeter_width / 2));
 		else

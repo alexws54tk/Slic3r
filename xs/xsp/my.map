@@ -1,6 +1,7 @@
 coordf_t T_NV
 
 std::string                     T_STD_STRING
+local_encoded_string     		T_STD_STRING_LOCAL_ENCODING
 t_config_option_key             T_STD_STRING
 t_model_material_id             T_STD_STRING
 
@@ -190,6 +191,10 @@ GCode*                      O_OBJECT_SLIC3R
 Ref<GCode>                  O_OBJECT_SLIC3R_T
 Clone<GCode>                O_OBJECT_SLIC3R_T
 
+GCodePreviewData*			O_OBJECT_SLIC3R
+Ref<GCodePreviewData>		O_OBJECT_SLIC3R_T
+Clone<GCodePreviewData>		O_OBJECT_SLIC3R_T
+
 MotionPlanner*             O_OBJECT_SLIC3R
 Ref<MotionPlanner>         O_OBJECT_SLIC3R_T
 Clone<MotionPlanner>       O_OBJECT_SLIC3R_T
@@ -210,12 +215,15 @@ PrintObjectSupportMaterial*       O_OBJECT_SLIC3R
 Ref<PrintObjectSupportMaterial>   O_OBJECT_SLIC3R_T
 Clone<PrintObjectSupportMaterial> O_OBJECT_SLIC3R_T
 
-GLShader*                  O_OBJECT_SLIC3R
-Ref<GLShader>              O_OBJECT_SLIC3R_T
-GLVolume*                  O_OBJECT_SLIC3R
-Ref<GLVolume>              O_OBJECT_SLIC3R_T
-GLVolumeCollection*        O_OBJECT_SLIC3R
-Ref<GLVolumeCollection>    O_OBJECT_SLIC3R_T
+AppConfig*	                O_OBJECT_SLIC3R
+Ref<AppConfig>         		O_OBJECT_SLIC3R_T
+
+GLShader*                  	O_OBJECT_SLIC3R
+Ref<GLShader>              	O_OBJECT_SLIC3R_T
+GLVolume*                  	O_OBJECT_SLIC3R
+Ref<GLVolume>              	O_OBJECT_SLIC3R_T
+GLVolumeCollection*        	O_OBJECT_SLIC3R
+Ref<GLVolumeCollection>    	O_OBJECT_SLIC3R_T
 
 Preset*	                	O_OBJECT_SLIC3R
 Ref<Preset>                	O_OBJECT_SLIC3R_T
@@ -223,6 +231,10 @@ PresetCollection*	      	O_OBJECT_SLIC3R
 Ref<PresetCollection>      	O_OBJECT_SLIC3R_T
 PresetBundle*	    		O_OBJECT_SLIC3R
 Ref<PresetBundle>    		O_OBJECT_SLIC3R_T
+PresetHints*	    		O_OBJECT_SLIC3R
+Ref<PresetHints>    		O_OBJECT_SLIC3R_T
+TabIface*	   				O_OBJECT_SLIC3R
+Ref<TabIface> 				O_OBJECT_SLIC3R_T
 
 Axis                  T_UV
 ExtrusionLoopRole     T_UV
@@ -271,6 +283,14 @@ T_STD_STRING
       // const char * c = SvPV($arg, len);
       // Always convert strings to UTF-8 before passing them to XS
       const char * c = SvPVutf8($arg, len);
+      $var = std::string(c, len);
+    }
+
+INPUT
+T_STD_STRING_LOCAL_ENCODING
+    {
+      size_t len;
+      const char * c = SvPV($arg, len);
       $var = std::string(c, len);
     }
 
@@ -432,6 +452,9 @@ OUTPUT
 
 T_STD_STRING
     $arg = newSVpvn_utf8( $var.c_str(), $var.length(), true );
+
+T_STD_STRING_LOCAL_ENCODING
+    $arg = newSVpvn( $var.c_str(), $var.length() );
 
 T_STD_VECTOR_STD_STRING
 	AV* av = newAV();
