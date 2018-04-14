@@ -9,6 +9,7 @@
 #include "../../libslic3r/GCode/PreviewData.hpp"
 #include "../../libslic3r/Print.hpp"
 #include "../../libslic3r/Slicing.hpp"
+#include "../../slic3r/GUI/PresetBundle.hpp"
 #include "GCode/Analyzer.hpp"
 
 #include <stdio.h>
@@ -27,6 +28,8 @@
 #include <wx/image.h>
 #include <wx/settings.h>
 
+#include "GUI.hpp"
+
 namespace Slic3r {
 
 void GLIndexedVertexArray::load_mesh_flat_shading(const TriangleMesh &mesh)
@@ -41,6 +44,25 @@ void GLIndexedVertexArray::load_mesh_flat_shading(const TriangleMesh &mesh)
         const stl_facet &facet = mesh.stl.facet_start[i];
         for (int j = 0; j < 3; ++ j)
             this->push_geometry(facet.vertex[j].x, facet.vertex[j].y, facet.vertex[j].z, facet.normal.x, facet.normal.y, facet.normal.z);
+    }
+}
+
+void GLIndexedVertexArray::load_mesh_full_shading(const TriangleMesh &mesh)
+{
+    assert(triangle_indices.empty() && vertices_and_normals_interleaved_size == 0);
+    assert(quad_indices.empty() && triangle_indices_size == 0);
+    assert(vertices_and_normals_interleaved.size() % 6 == 0 && quad_indices_size == vertices_and_normals_interleaved.size());
+
+    this->vertices_and_normals_interleaved.reserve(this->vertices_and_normals_interleaved.size() + 3 * 3 * 2 * mesh.facets_count());
+
+    unsigned int vertices_count = 0;
+    for (int i = 0; i < mesh.stl.stats.number_of_facets; ++i) {
+        const stl_facet &facet = mesh.stl.facet_start[i];
+        for (int j = 0; j < 3; ++j)
+            this->push_geometry(facet.vertex[j].x, facet.vertex[j].y, facet.vertex[j].z, facet.normal.x, facet.normal.y, facet.normal.z);
+
+        this->push_triangle(vertices_count, vertices_count + 1, vertices_count + 2);
+        vertices_count += 3;
     }
 }
 
@@ -171,6 +193,45 @@ void GLIndexedVertexArray::render(
     glDisableClientState(GL_NORMAL_ARRAY);
 }
 
+const float GLVolume::SELECTED_COLOR[4] = { 0.0f, 1.0f, 0.0f, 1.0f };
+const float GLVolume::HOVER_COLOR[4] = { 0.4f, 0.9f, 0.1f, 1.0f };
+const float GLVolume::OUTSIDE_COLOR[4] = { 0.0f, 0.38f, 0.8f, 1.0f };
+const float GLVolume::SELECTED_OUTSIDE_COLOR[4] = { 0.19f, 0.58f, 1.0f, 1.0f };
+
+void GLVolume::set_render_color(float r, float g, float b, float a)
+{
+    render_color[0] = r;
+    render_color[1] = g;
+    render_color[2] = b;
+    render_color[3] = a;
+}
+
+void GLVolume::set_render_color(const float* rgba, unsigned int size)
+{
+    size = std::min((unsigned int)4, size);
+    for (int i = 0; i < size; ++i)
+    {
+        render_color[i] = rgba[i];
+    }
+}
+
+void GLVolume::set_render_color()
+{
+    if (selected)
+    {
+        if (is_outside)
+            set_render_color(SELECTED_OUTSIDE_COLOR, 4);
+        else
+            set_render_color(SELECTED_COLOR, 4);
+    }
+    else if (hover)
+        set_render_color(HOVER_COLOR, 4);
+    else if (is_outside)
+        set_render_color(OUTSIDE_COLOR, 4);
+    else
+        set_render_color(color, 4);
+}
+
 void GLVolume::set_range(double min_z, double max_z)
 {
     this->qverts_range.first  = 0;
@@ -219,6 +280,56 @@ void GLVolume::render() const
     else
         this->indexed_vertex_array.render();
     glPopMatrix();
+}
+
+void GLVolume::render_using_layer_height() const
+{
+    if (!is_active)
+        return;
+
+    GLint current_program_id;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &current_program_id);
+
+    if ((layer_height_texture_data.shader_id > 0) && (layer_height_texture_data.shader_id != current_program_id))
+        glUseProgram(layer_height_texture_data.shader_id);
+
+    GLint z_to_texture_row_id = (layer_height_texture_data.shader_id > 0) ? glGetUniformLocation(layer_height_texture_data.shader_id, "z_to_texture_row") : -1;
+    GLint z_texture_row_to_normalized_id = (layer_height_texture_data.shader_id > 0) ? glGetUniformLocation(layer_height_texture_data.shader_id, "z_texture_row_to_normalized") : -1;
+    GLint z_cursor_id = (layer_height_texture_data.shader_id > 0) ? glGetUniformLocation(layer_height_texture_data.shader_id, "z_cursor") : -1;
+    GLint z_cursor_band_width_id = (layer_height_texture_data.shader_id > 0) ? glGetUniformLocation(layer_height_texture_data.shader_id, "z_cursor_band_width") : -1;
+
+    if (z_to_texture_row_id  >= 0)
+        glUniform1f(z_to_texture_row_id, (GLfloat)layer_height_texture_z_to_row_id());
+
+    if (z_texture_row_to_normalized_id >= 0)
+        glUniform1f(z_texture_row_to_normalized_id, (GLfloat)(1.0f / layer_height_texture_height()));
+
+    if (z_cursor_id >= 0)
+        glUniform1f(z_cursor_id, (GLfloat)(layer_height_texture_data.print_object->model_object()->bounding_box().max.z * layer_height_texture_data.z_cursor_relative));
+
+    if (z_cursor_band_width_id >= 0)
+        glUniform1f(z_cursor_band_width_id, (GLfloat)layer_height_texture_data.edit_band_width);
+
+    unsigned int w = layer_height_texture_width();
+    unsigned int h = layer_height_texture_height();
+
+    glBindTexture(GL_TEXTURE_2D, layer_height_texture_data.texture_id);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+    glTexImage2D(GL_TEXTURE_2D, 1, GL_RGBA8, w / 2, h / 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, layer_height_texture_data_ptr_level0());
+    glTexSubImage2D(GL_TEXTURE_2D, 1, 0, 0, w / 2, h / 2, GL_RGBA, GL_UNSIGNED_BYTE, layer_height_texture_data_ptr_level1());
+
+    render();
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    if ((current_program_id > 0) && (layer_height_texture_data.shader_id != current_program_id))
+        glUseProgram(current_program_id);
+}
+
+double GLVolume::layer_height_texture_z_to_row_id() const
+{
+    return (this->layer_height_texture.get() == nullptr) ? 0.0 : double(this->layer_height_texture->cells - 1) / (double(this->layer_height_texture->width) * this->layer_height_texture_data.print_object->model_object()->bounding_box().max.z);
 }
 
 void GLVolume::generate_layer_height_texture(PrintObject *print_object, bool force)
@@ -276,6 +387,15 @@ std::vector<int> GLVolumeCollection::load_object(
     std::vector<int> volumes_idx;
     for (int volume_idx = 0; volume_idx < int(model_object->volumes.size()); ++ volume_idx) {
         const ModelVolume *model_volume = model_object->volumes[volume_idx];
+
+        int extruder_id = -1;
+        if (!model_volume->modifier)
+        {
+            extruder_id = model_volume->config.has("extruder") ? model_volume->config.option("extruder")->getInt() : 0;
+            if (extruder_id == 0)
+                extruder_id = model_object->config.has("extruder") ? model_object->config.option("extruder")->getInt() : 0;
+        }
+
         for (int instance_idx : instance_idxs) {
             const ModelInstance *instance = model_object->instances[instance_idx];
             TriangleMesh mesh = model_volume->mesh;
@@ -286,7 +406,11 @@ std::vector<int> GLVolumeCollection::load_object(
             color[3] = model_volume->modifier ? 0.5f : 1.f;
             this->volumes.emplace_back(new GLVolume(color));
             GLVolume &v = *this->volumes.back();
-			v.indexed_vertex_array.load_mesh_flat_shading(mesh);
+            if (use_VBOs)
+                v.indexed_vertex_array.load_mesh_full_shading(mesh);
+            else
+                v.indexed_vertex_array.load_mesh_flat_shading(mesh);
+
             // finalize_geometry() clears the vertex arrays, therefore the bounding box has to be computed before finalize_geometry().
             v.bounding_box = v.indexed_vertex_array.bounding_box();
             v.indexed_vertex_array.finalize_geometry(use_VBOs);
@@ -301,8 +425,14 @@ std::vector<int> GLVolumeCollection::load_object(
                 v.drag_group_id = obj_idx * 1000;
             else if (drag_by == "instance")
                 v.drag_group_id = obj_idx * 1000 + instance_idx;
-            if (! model_volume->modifier)
+
+            if (!model_volume->modifier)
+            {
                 v.layer_height_texture = layer_height_texture;
+                if (extruder_id != -1)
+                    v.extruder_id = extruder_id;
+            }
+            v.is_modifier = model_volume->modifier;
         }
     }
     
@@ -311,13 +441,22 @@ std::vector<int> GLVolumeCollection::load_object(
 
 
 int GLVolumeCollection::load_wipe_tower_preview(
-    int obj_idx, float pos_x, float pos_y, float width, float depth, float height, bool use_VBOs)
+    int obj_idx, float pos_x, float pos_y, float width, float depth, float height, float rotation_angle, bool use_VBOs)
 {
     float color[4] = { 1.0f, 1.0f, 0.0f, 0.5f };
     this->volumes.emplace_back(new GLVolume(color));
     GLVolume &v = *this->volumes.back();
-    auto mesh = make_cube(width, depth, height);
-    v.indexed_vertex_array.load_mesh_flat_shading(mesh);
+
+    auto mesh = make_cube(width, depth, height);    
+    mesh.translate(-width/2.f,-depth/2.f,0.f);    
+    Point origin_of_rotation(0.f,0.f);
+    mesh.rotate(rotation_angle,&origin_of_rotation);
+
+    if (use_VBOs)
+        v.indexed_vertex_array.load_mesh_full_shading(mesh);
+    else
+        v.indexed_vertex_array.load_mesh_flat_shading(mesh);
+
     v.origin = Pointf3(pos_x, pos_y, 0.);
     // finalize_geometry() clears the vertex arrays, therefore the bounding box has to be computed before finalize_geometry().
     v.bounding_box = v.indexed_vertex_array.bounding_box();
@@ -325,20 +464,25 @@ int GLVolumeCollection::load_wipe_tower_preview(
     v.composite_id = obj_idx * 1000000;
     v.select_group_id = obj_idx * 1000000;
     v.drag_group_id = obj_idx * 1000;
+    v.is_wipe_tower = true;
     return int(this->volumes.size() - 1);
 }
 
 void GLVolumeCollection::render_VBOs() const
 {
-//    glEnable(GL_BLEND);
-//    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glCullFace(GL_BACK);
-    glEnableClientState(GL_VERTEX_ARRAY);
-    glEnableClientState(GL_NORMAL_ARRAY);
+    ::glEnable(GL_BLEND);
+    ::glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    ::glCullFace(GL_BACK);
+    ::glEnableClientState(GL_VERTEX_ARRAY);
+    ::glEnableClientState(GL_NORMAL_ARRAY);
  
     GLint current_program_id;
-    glGetIntegerv(GL_CURRENT_PROGRAM, &current_program_id);
+    ::glGetIntegerv(GL_CURRENT_PROGRAM, &current_program_id);
     GLint color_id = (current_program_id > 0) ? glGetUniformLocation(current_program_id, "uniform_color") : -1;
+    GLint print_box_min_id = (current_program_id > 0) ? glGetUniformLocation(current_program_id, "print_box.min") : -1;
+    GLint print_box_max_id = (current_program_id > 0) ? glGetUniformLocation(current_program_id, "print_box.max") : -1;
+    GLint print_box_origin_id = (current_program_id > 0) ? glGetUniformLocation(current_program_id, "print_box.volume_origin") : -1;
 
     for (GLVolume *volume : this->volumes) {
         if (!volume->is_active)
@@ -346,61 +490,110 @@ void GLVolumeCollection::render_VBOs() const
 
         if (!volume->indexed_vertex_array.vertices_and_normals_interleaved_VBO_id)
             continue;
+
+        if (volume->layer_height_texture_data.can_use())
+        {
+            ::glDisableClientState(GL_VERTEX_ARRAY);
+            ::glDisableClientState(GL_NORMAL_ARRAY);
+            volume->generate_layer_height_texture(volume->layer_height_texture_data.print_object, false);
+            volume->render_using_layer_height();
+            ::glEnableClientState(GL_VERTEX_ARRAY);
+            ::glEnableClientState(GL_NORMAL_ARRAY);
+            continue;
+        }
+
+        volume->set_render_color();
+
         GLsizei n_triangles = GLsizei(std::min(volume->indexed_vertex_array.triangle_indices_size, volume->tverts_range.second - volume->tverts_range.first));
         GLsizei n_quads     = GLsizei(std::min(volume->indexed_vertex_array.quad_indices_size,     volume->qverts_range.second - volume->qverts_range.first));
         if (n_triangles + n_quads == 0)
         {
-            if (_render_interleaved_only_volumes.enabled)
+            ::glDisableClientState(GL_VERTEX_ARRAY);
+            ::glDisableClientState(GL_NORMAL_ARRAY);
+
+            if (color_id >= 0)
             {
-                ::glDisableClientState(GL_VERTEX_ARRAY);
-                ::glDisableClientState(GL_NORMAL_ARRAY);
-                ::glEnable(GL_BLEND);
-                ::glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-                if (color_id >= 0)
-                {
-                    float color[4];
-                    ::memcpy((void*)color, (const void*)volume->color, 3 * sizeof(float));
-                    color[3] = _render_interleaved_only_volumes.alpha;
-                    ::glUniform4fv(color_id, 1, (const GLfloat*)color);
-                }
-                else
-                    ::glColor4f(volume->color[0], volume->color[1], volume->color[2], _render_interleaved_only_volumes.alpha);
-
-                volume->render();
-
-                ::glDisable(GL_BLEND);
-                ::glEnableClientState(GL_VERTEX_ARRAY);
-                ::glEnableClientState(GL_NORMAL_ARRAY);
+                float color[4];
+                ::memcpy((void*)color, (const void*)volume->render_color, 4 * sizeof(float));
+                ::glUniform4fv(color_id, 1, (const GLfloat*)color);
             }
+            else
+                ::glColor4f(volume->render_color[0], volume->render_color[1], volume->render_color[2], volume->render_color[3]);
+
+            if (print_box_min_id != -1)
+                ::glUniform3fv(print_box_min_id, 1, (const GLfloat*)print_box_min);
+
+            if (print_box_max_id != -1)
+                ::glUniform3fv(print_box_max_id, 1, (const GLfloat*)print_box_max);
+
+            if (print_box_origin_id != -1)
+            {
+                float origin[4] = { (float)volume->origin.x, (float)volume->origin.y, (float)volume->origin.z, volume->outside_printer_detection_enabled ? 1.0f : 0.0f };
+                ::glUniform4fv(print_box_origin_id, 1, (const GLfloat*)origin);
+            }
+
+            volume->render();
+
+            ::glEnableClientState(GL_VERTEX_ARRAY);
+            ::glEnableClientState(GL_NORMAL_ARRAY);
+
             continue;
         }
+
         if (color_id >= 0)
-            glUniform4fv(color_id, 1, (const GLfloat*)volume->color);
+            ::glUniform4fv(color_id, 1, (const GLfloat*)volume->render_color);
         else
-            glColor4f(volume->color[0], volume->color[1], volume->color[2], volume->color[3]);            
-        glBindBuffer(GL_ARRAY_BUFFER, volume->indexed_vertex_array.vertices_and_normals_interleaved_VBO_id);
-        glVertexPointer(3, GL_FLOAT, 6 * sizeof(float), (const void*)(3 * sizeof(float)));
-        glNormalPointer(GL_FLOAT, 6 * sizeof(float), nullptr);
+            ::glColor4f(volume->render_color[0], volume->render_color[1], volume->render_color[2], volume->render_color[3]);
+
+        if (print_box_min_id != -1)
+            ::glUniform3fv(print_box_min_id, 1, (const GLfloat*)print_box_min);
+
+        if (print_box_max_id != -1)
+            ::glUniform3fv(print_box_max_id, 1, (const GLfloat*)print_box_max);
+
+        if (print_box_origin_id != -1)
+        {
+            float origin[4] = { (float)volume->origin.x, (float)volume->origin.y, (float)volume->origin.z, volume->outside_printer_detection_enabled ? 1.0f : 0.0f };
+            ::glUniform4fv(print_box_origin_id, 1, (const GLfloat*)origin);
+        }
+
+        ::glBindBuffer(GL_ARRAY_BUFFER, volume->indexed_vertex_array.vertices_and_normals_interleaved_VBO_id);
+        ::glVertexPointer(3, GL_FLOAT, 6 * sizeof(float), (const void*)(3 * sizeof(float)));
+        ::glNormalPointer(GL_FLOAT, 6 * sizeof(float), nullptr);
+
+        bool has_offset = (volume->origin.x != 0) || (volume->origin.y != 0) || (volume->origin.z != 0);
+        if (has_offset) {
+            ::glPushMatrix();
+            ::glTranslated(volume->origin.x, volume->origin.y, volume->origin.z);
+        }
+
         if (n_triangles > 0) {
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, volume->indexed_vertex_array.triangle_indices_VBO_id);
-            glDrawElements(GL_TRIANGLES, n_triangles, GL_UNSIGNED_INT, (const void*)(volume->tverts_range.first * 4));
+            ::glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, volume->indexed_vertex_array.triangle_indices_VBO_id);
+            ::glDrawElements(GL_TRIANGLES, n_triangles, GL_UNSIGNED_INT, (const void*)(volume->tverts_range.first * 4));
         }
         if (n_quads > 0) {
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, volume->indexed_vertex_array.quad_indices_VBO_id);
-            glDrawElements(GL_QUADS, n_quads, GL_UNSIGNED_INT, (const void*)(volume->qverts_range.first * 4));
+            ::glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, volume->indexed_vertex_array.quad_indices_VBO_id);
+            ::glDrawElements(GL_QUADS, n_quads, GL_UNSIGNED_INT, (const void*)(volume->qverts_range.first * 4));
         }
+
+        if (has_offset)
+            ::glPopMatrix();
     }
 
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-    glDisableClientState(GL_VERTEX_ARRAY);
-    glDisableClientState(GL_NORMAL_ARRAY);
-//    glDisable(GL_BLEND);
+    ::glBindBuffer(GL_ARRAY_BUFFER, 0);
+    ::glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+
+    ::glDisableClientState(GL_VERTEX_ARRAY);
+    ::glDisableClientState(GL_NORMAL_ARRAY);
+
+    ::glDisable(GL_BLEND);
 }
 
 void GLVolumeCollection::render_legacy() const
 {
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
     glCullFace(GL_BACK);
     glEnableClientState(GL_VERTEX_ARRAY);
     glEnableClientState(GL_NORMAL_ARRAY);
@@ -410,27 +603,25 @@ void GLVolumeCollection::render_legacy() const
         if (!volume->is_active)
             continue;
 
+        volume->set_render_color();
+
         GLsizei n_triangles = GLsizei(std::min(volume->indexed_vertex_array.triangle_indices_size, volume->tverts_range.second - volume->tverts_range.first));
         GLsizei n_quads     = GLsizei(std::min(volume->indexed_vertex_array.quad_indices_size,     volume->qverts_range.second - volume->qverts_range.first));
         if (n_triangles + n_quads == 0)
         {
-            if (_render_interleaved_only_volumes.enabled)
-            {
-                ::glDisableClientState(GL_VERTEX_ARRAY);
-                ::glDisableClientState(GL_NORMAL_ARRAY);
-                ::glEnable(GL_BLEND);
-                ::glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            ::glDisableClientState(GL_VERTEX_ARRAY);
+            ::glDisableClientState(GL_NORMAL_ARRAY);
 
-                ::glColor4f(volume->color[0], volume->color[1], volume->color[2], _render_interleaved_only_volumes.alpha);
-                volume->render();
+            ::glColor4f(volume->render_color[0], volume->render_color[1], volume->render_color[2], volume->render_color[3]);
+            volume->render();
 
-                ::glDisable(GL_BLEND);
-                ::glEnableClientState(GL_VERTEX_ARRAY);
-                ::glEnableClientState(GL_NORMAL_ARRAY);
-            }
+            ::glEnableClientState(GL_VERTEX_ARRAY);
+            ::glEnableClientState(GL_NORMAL_ARRAY);
+
             continue;
         }
-        glColor4f(volume->color[0], volume->color[1], volume->color[2], volume->color[3]);
+
+        glColor4f(volume->render_color[0], volume->render_color[1], volume->render_color[2], volume->render_color[3]);
         glVertexPointer(3, GL_FLOAT, 6 * sizeof(float), volume->indexed_vertex_array.vertices_and_normals_interleaved.data() + 3);
         glNormalPointer(GL_FLOAT, 6 * sizeof(float), volume->indexed_vertex_array.vertices_and_normals_interleaved.data());
         bool has_offset = volume->origin.x != 0 || volume->origin.y != 0 || volume->origin.z != 0;
@@ -443,11 +634,140 @@ void GLVolumeCollection::render_legacy() const
         if (n_quads > 0)
             glDrawElements(GL_QUADS, n_quads, GL_UNSIGNED_INT, volume->indexed_vertex_array.quad_indices.data() + volume->qverts_range.first);
         if (has_offset)
-            glPushMatrix();
+            glPopMatrix();
     }
 
     glDisableClientState(GL_VERTEX_ARRAY);
     glDisableClientState(GL_NORMAL_ARRAY);
+
+    glDisable(GL_BLEND);
+}
+
+void GLVolumeCollection::update_outside_state(const DynamicPrintConfig* config, bool all_inside)
+{
+    if (config == nullptr)
+        return;
+
+    const ConfigOptionPoints* opt = dynamic_cast<const ConfigOptionPoints*>(config->option("bed_shape"));
+    if (opt == nullptr)
+        return;
+
+    BoundingBox bed_box_2D = get_extents(Polygon::new_scale(opt->values));
+    BoundingBoxf3 print_volume(Pointf3(unscale(bed_box_2D.min.x), unscale(bed_box_2D.min.y), 0.0), Pointf3(unscale(bed_box_2D.max.x), unscale(bed_box_2D.max.y), config->opt_float("max_print_height")));
+    // Allow the objects to protrude below the print bed
+    print_volume.min.z = -1e10;
+
+    for (GLVolume* volume : this->volumes)
+    {
+        if (all_inside)
+        {
+            volume->is_outside = false;
+            continue;
+        }
+
+        volume->is_outside = !print_volume.contains(volume->transformed_bounding_box());
+    }
+}
+
+void GLVolumeCollection::update_colors_by_extruder(const DynamicPrintConfig* config)
+{
+    static const float inv_255 = 1.0f / 255.0f;
+
+    struct Color
+    {
+        std::string text;
+        unsigned char rgb[3];
+
+        Color()
+            : text("")
+        {
+            rgb[0] = 255;
+            rgb[1] = 255;
+            rgb[2] = 255;
+        }
+
+        void set(const std::string& text, unsigned char* rgb)
+        {
+            this->text = text;
+            ::memcpy((void*)this->rgb, (const void*)rgb, 3 * sizeof(unsigned char));
+        }
+    };
+
+    if (config == nullptr)
+        return;
+
+    const ConfigOptionStrings* extruders_opt = dynamic_cast<const ConfigOptionStrings*>(config->option("extruder_colour"));
+    if (extruders_opt == nullptr)
+        return;
+
+    const ConfigOptionStrings* filamemts_opt = dynamic_cast<const ConfigOptionStrings*>(config->option("filament_colour"));
+    if (filamemts_opt == nullptr)
+        return;
+
+    unsigned int colors_count = std::max((unsigned int)extruders_opt->values.size(), (unsigned int)filamemts_opt->values.size());
+    if (colors_count == 0)
+        return;
+
+    std::vector<Color> colors(colors_count);
+
+    unsigned char rgb[3];
+    for (unsigned int i = 0; i < colors_count; ++i)
+    {
+        const std::string& txt_color = config->opt_string("extruder_colour", i);
+        if (PresetBundle::parse_color(txt_color, rgb))
+        {
+            colors[i].set(txt_color, rgb);
+        }
+        else
+        {
+            const std::string& txt_color = config->opt_string("filament_colour", i);
+            if (PresetBundle::parse_color(txt_color, rgb))
+                colors[i].set(txt_color, rgb);
+        }
+    }
+
+    for (GLVolume* volume : volumes)
+    {
+        if ((volume == nullptr) || volume->is_modifier || volume->is_wipe_tower)
+            continue;
+
+        int extruder_id = volume->extruder_id - 1;
+        if ((extruder_id < 0) || ((unsigned int)colors.size() <= extruder_id))
+            extruder_id = 0;
+
+        const Color& color = colors[extruder_id];
+        if (!color.text.empty())
+        {
+            for (int i = 0; i < 3; ++i)
+            {
+                volume->color[i] = (float)color.rgb[i] * inv_255;
+            }
+        }
+    }
+}
+
+std::vector<double> GLVolumeCollection::get_current_print_zs() const
+{
+    // Collect layer top positions of all volumes.
+    std::vector<double> print_zs;
+    for (GLVolume *vol : this->volumes)
+        append(print_zs, vol->print_zs);
+    std::sort(print_zs.begin(), print_zs.end());
+
+    // Replace intervals of layers with similar top positions with their average value.
+    int n = int(print_zs.size());
+    int k = 0;
+    for (int i = 0; i < n;) {
+        int j = i + 1;
+        coordf_t zmax = print_zs[i] + EPSILON;
+        for (; j < n && print_zs[j] <= zmax; ++ j) ;
+        print_zs[k ++] = (j > i + 1) ? (0.5 * (print_zs[i] + print_zs[j - 1])) : print_zs[i];
+        i = j;
+    }
+    if (k < n)
+        print_zs.erase(print_zs.begin() + k, print_zs.end());
+
+    return print_zs;
 }
 
 // caller is responsible for supplying NO lines with zero length
@@ -1112,6 +1432,100 @@ static void point3_to_verts(const Point3& point, double width, double height, GL
 
 _3DScene::GCodePreviewVolumeIndex _3DScene::s_gcode_preview_volume_index;
 _3DScene::LegendTexture _3DScene::s_legend_texture;
+_3DScene::WarningTexture _3DScene::s_warning_texture;
+
+unsigned int _3DScene::TextureBase::finalize()
+{
+    if (!m_data.empty()) {
+        // sends buffer to gpu
+        ::glGenTextures(1, &m_tex_id);
+        ::glBindTexture(GL_TEXTURE_2D, m_tex_id);
+        ::glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, (GLsizei)m_tex_width, (GLsizei)m_tex_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, (const GLvoid*)m_data.data());
+        ::glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        ::glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        ::glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 1);
+        ::glBindTexture(GL_TEXTURE_2D, 0);
+        m_data.clear();
+    }
+    return (m_tex_width > 0 && m_tex_height > 0) ? m_tex_id : 0;
+}
+
+void _3DScene::TextureBase::_destroy_texture()
+{
+    if (m_tex_id > 0)
+    {
+        ::glDeleteTextures(1, &m_tex_id);
+        m_tex_id = 0;
+        m_tex_height = 0;
+        m_tex_width = 0;
+    }
+    m_data.clear();
+}
+
+
+const unsigned char _3DScene::WarningTexture::Background_Color[3] = { 9, 91, 134 };
+const unsigned char _3DScene::WarningTexture::Opacity = 255;
+
+// Generate a texture data, but don't load it into the GPU yet, as the GPU context may not yet be valid.
+bool _3DScene::WarningTexture::generate(const std::string& msg)
+{
+    // Mark the texture as released, but don't release the texture from the GPU yet.
+    m_tex_width = m_tex_height = 0;
+    m_data.clear();
+
+    if (msg.empty())
+        return false;
+
+    wxMemoryDC memDC;
+    // select default font
+    memDC.SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT));
+
+    // calculates texture size
+    wxCoord w, h;
+    memDC.GetTextExtent(msg, &w, &h);
+    m_tex_width = (unsigned int)w;
+    m_tex_height = (unsigned int)h;
+
+    // generates bitmap
+    wxBitmap bitmap(m_tex_width, m_tex_height);
+
+#if defined(__APPLE__) || defined(_MSC_VER)
+    bitmap.UseAlpha();
+#endif
+
+    memDC.SelectObject(bitmap);
+    memDC.SetBackground(wxBrush(wxColour(Background_Color[0], Background_Color[1], Background_Color[2])));
+    memDC.Clear();
+
+    memDC.SetTextForeground(*wxWHITE);
+
+    // draw message
+    memDC.DrawText(msg, 0, 0);
+
+    memDC.SelectObject(wxNullBitmap);
+
+    // Convert the bitmap into a linear data ready to be loaded into the GPU.
+    {
+        wxImage image = bitmap.ConvertToImage();
+        image.SetMaskColour(Background_Color[0], Background_Color[1], Background_Color[2]);
+
+        // prepare buffer
+        m_data.assign(4 * m_tex_width * m_tex_height, 0);
+        for (unsigned int h = 0; h < m_tex_height; ++h)
+        {
+            unsigned int hh = h * m_tex_width;
+            unsigned char* px_ptr = m_data.data() + 4 * hh;
+            for (unsigned int w = 0; w < m_tex_width; ++w)
+            {
+                *px_ptr++ = image.GetRed(w, h);
+                *px_ptr++ = image.GetGreen(w, h);
+                *px_ptr++ = image.GetBlue(w, h);
+                *px_ptr++ = image.IsTransparent(w, h) ? 0 : Opacity;
+            }
+        }
+    }
+    return true;
+}
 
 const unsigned char _3DScene::LegendTexture::Squares_Border_Color[3] = { 64, 64, 64 };
 const unsigned char _3DScene::LegendTexture::Background_Color[3] = { 9, 91, 134 };
@@ -1125,7 +1539,7 @@ bool _3DScene::LegendTexture::generate(const GCodePreviewData& preview_data, con
     m_data.clear();
 
     // collects items to render
-    const std::string& title = preview_data.get_legend_title();
+    auto title = GUI::L_str(preview_data.get_legend_title());
     const GCodePreviewData::LegendItemsList& items = preview_data.get_legend_items(tool_colors);
 
     unsigned int items_count = (unsigned int)items.size();
@@ -1147,7 +1561,7 @@ bool _3DScene::LegendTexture::generate(const GCodePreviewData& preview_data, con
     unsigned int max_text_height = 0;
     for (const GCodePreviewData::LegendItem& item : items)
     {
-        memDC.GetTextExtent(item.text, &w, &h);
+        memDC.GetTextExtent(GUI::from_u8(item.text), &w, &h);
         max_text_width = std::max(max_text_width, (unsigned int)w);
         max_text_height = std::max(max_text_height, (unsigned int)h);
     }
@@ -1224,7 +1638,7 @@ bool _3DScene::LegendTexture::generate(const GCodePreviewData& preview_data, con
         memDC.DrawRectangle(wxRect(icon_x_inner, icon_y + 1, px_inner_square, px_inner_square));
 
         // draw text
-        memDC.DrawText(item.text, text_x, icon_y + text_y_offset);
+		memDC.DrawText(GUI::from_u8(item.text), text_x, icon_y + text_y_offset);
 
         // update y
         icon_y += icon_y_step;
@@ -1253,34 +1667,6 @@ bool _3DScene::LegendTexture::generate(const GCodePreviewData& preview_data, con
         }
     }
     return true;
-}
-
-unsigned int _3DScene::LegendTexture::finalize()
-{
-    if (! m_data.empty()) {
-        // sends buffer to gpu
-        ::glGenTextures(1, &m_tex_id);
-        ::glBindTexture(GL_TEXTURE_2D, m_tex_id);
-        ::glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, (GLsizei)m_tex_width, (GLsizei)m_tex_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, (const GLvoid*)m_data.data());
-        ::glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        ::glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        ::glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 1);
-        ::glBindTexture(GL_TEXTURE_2D, 0);
-        m_data.clear();
-    }
-    return (m_tex_width > 0 && m_tex_height > 0) ? m_tex_id : 0;
-}
-
-void _3DScene::LegendTexture::_destroy_texture()
-{
-    if (m_tex_id > 0)
-    {
-        ::glDeleteTextures(1, &m_tex_id);
-        m_tex_id = 0;
-        m_tex_height = 0;
-        m_tex_width = 0;
-    }
-    m_data.clear();
 }
 
 void _3DScene::_glew_init()
@@ -1332,25 +1718,15 @@ void _3DScene::load_gcode_preview(const Print* print, const GCodePreviewData* pr
         _load_gcode_unretractions(*preview_data, *volumes, use_VBOs);
 
         if (volumes->empty())
-        {
             reset_legend_texture();
-            volumes->set_render_interleaved_only_volumes(GLVolumeCollection::RenderInterleavedOnlyVolumes(false, 0.0f));
-        }
         else
         {
             _generate_legend_texture(*preview_data, tool_colors);
-
             _load_shells(*print, *volumes, use_VBOs);
-            volumes->set_render_interleaved_only_volumes(GLVolumeCollection::RenderInterleavedOnlyVolumes(true, 0.25f));
         }
     }
 
     _update_gcode_volumes_visibility(*preview_data, *volumes);
-}
-
-unsigned int _3DScene::get_legend_texture_id()
-{
-    return s_legend_texture.get_texture_id();
 }
 
 unsigned int _3DScene::get_legend_texture_width()
@@ -1366,6 +1742,36 @@ unsigned int _3DScene::get_legend_texture_height()
 void _3DScene::reset_legend_texture()
 {
     s_legend_texture.reset_texture();
+}
+
+unsigned int _3DScene::finalize_legend_texture()
+{
+    return s_legend_texture.finalize();
+}
+
+unsigned int _3DScene::get_warning_texture_width()
+{
+    return s_warning_texture.get_texture_width();
+}
+
+unsigned int _3DScene::get_warning_texture_height()
+{
+    return s_warning_texture.get_texture_height();
+}
+
+void _3DScene::generate_warning_texture(const std::string& msg)
+{
+    s_warning_texture.generate(msg);
+}
+
+void _3DScene::reset_warning_texture()
+{
+    s_warning_texture.reset_texture();
+}
+
+unsigned int _3DScene::finalize_warning_texture()
+{
+    return s_warning_texture.finalize();
 }
 
 // Create 3D thick extrusion lines for a skirt and brim.
@@ -1480,6 +1886,7 @@ void _3DScene::_load_print_object_toolpaths(
     auto            new_volume = [volumes, &new_volume_mutex](const float *color) -> GLVolume* {
         auto *volume = new GLVolume(color);
         new_volume_mutex.lock();
+        volume->outside_printer_detection_enabled = false;
         volumes->volumes.emplace_back(volume);
         new_volume_mutex.unlock();
         return volume;
@@ -1630,6 +2037,7 @@ void _3DScene::_load_wipe_tower_toolpaths(
     auto            new_volume = [volumes, &new_volume_mutex](const float *color) -> GLVolume* {
         auto *volume = new GLVolume(color);
         new_volume_mutex.lock();
+        volume->outside_printer_detection_enabled = false;
         volumes->volumes.emplace_back(volume);
         new_volume_mutex.unlock();
         return volume;
@@ -1742,6 +2150,8 @@ void _3DScene::_load_gcode_extrusion_paths(const GCodePreviewData& preview_data,
                 return path.width;
             case GCodePreviewData::Extrusion::Feedrate:
                 return path.feedrate;
+            case GCodePreviewData::Extrusion::VolumetricRate:
+                return path.feedrate * (float)path.mm3_per_mm;
             case GCodePreviewData::Extrusion::Tool:
                 return (float)path.extruder_id;
             }
@@ -1756,11 +2166,13 @@ void _3DScene::_load_gcode_extrusion_paths(const GCodePreviewData& preview_data,
             case GCodePreviewData::Extrusion::FeatureType:
                 return data.get_extrusion_role_color((ExtrusionRole)(int)value);
             case GCodePreviewData::Extrusion::Height:
-                return data.get_extrusion_height_color(value);
+                return data.get_height_color(value);
             case GCodePreviewData::Extrusion::Width:
-                return data.get_extrusion_width_color(value);
+                return data.get_width_color(value);
             case GCodePreviewData::Extrusion::Feedrate:
-                return data.get_extrusion_feedrate_color(value);
+                return data.get_feedrate_color(value);
+            case GCodePreviewData::Extrusion::VolumetricRate:
+                return data.get_volumetric_rate_color(value);
             case GCodePreviewData::Extrusion::Tool:
                 {
                     static GCodePreviewData::Color color;
@@ -2040,7 +2452,7 @@ bool _3DScene::_travel_paths_by_feedrate(const GCodePreviewData& preview_data, G
     // creates a new volume for each feedrate
     for (Feedrate& feedrate : feedrates)
     {
-        GLVolume* volume = new GLVolume(preview_data.get_extrusion_feedrate_color(feedrate.value).rgba);
+        GLVolume* volume = new GLVolume(preview_data.get_feedrate_color(feedrate.value).rgba);
         if (volume == nullptr)
             return false;
         else
@@ -2200,11 +2612,15 @@ void _3DScene::_update_gcode_volumes_visibility(const GCodePreviewData& preview_
         for (std::vector<GLVolume*>::iterator it = begin; it != end; ++it)
         {
             GLVolume* volume = *it;
+            volume->outside_printer_detection_enabled = false;
 
             switch (s_gcode_preview_volume_index.first_volumes[i].type)
             {
             case GCodePreviewVolumeIndex::Extrusion:
                 {
+                    if ((ExtrusionRole)s_gcode_preview_volume_index.first_volumes[i].flag == erCustom)
+                        volume->zoom_to_volumes = false;
+                    
                     volume->is_active = preview_data.extrusion.is_role_flag_set((ExtrusionRole)s_gcode_preview_volume_index.first_volumes[i].flag);
                     break;
                 }
@@ -2229,6 +2645,7 @@ void _3DScene::_update_gcode_volumes_visibility(const GCodePreviewData& preview_
             case GCodePreviewVolumeIndex::Shell:
                 {
                     volume->is_active = preview_data.shell.is_visible;
+                    volume->color[3] = 0.25f;
                     volume->zoom_to_volumes = false;
                     break;
                 }
@@ -2246,11 +2663,6 @@ void _3DScene::_update_gcode_volumes_visibility(const GCodePreviewData& preview_
 void _3DScene::_generate_legend_texture(const GCodePreviewData& preview_data, const std::vector<float>& tool_colors)
 {
     s_legend_texture.generate(preview_data, tool_colors);
-}
-
-unsigned int _3DScene::finalize_legend_texture()
-{
-    return s_legend_texture.finalize();
 }
 
 void _3DScene::_load_shells(const Print& print, GLVolumeCollection& volumes, bool use_VBOs)
@@ -2286,8 +2698,10 @@ void _3DScene::_load_shells(const Print& print, GLVolumeCollection& volumes, boo
     coordf_t max_z = print.objects[0]->model_object()->get_model()->bounding_box().max.z;
     const PrintConfig& config = print.config;
     unsigned int extruders_count = config.nozzle_diameter.size();
-    if ((extruders_count > 1) && config.single_extruder_multi_material && config.wipe_tower && !config.complete_objects)
-        volumes.load_wipe_tower_preview(1000, config.wipe_tower_x, config.wipe_tower_y, config.wipe_tower_width, config.wipe_tower_per_color_wipe * (extruders_count - 1), max_z, use_VBOs);
+    if ((extruders_count > 1) && config.single_extruder_multi_material && config.wipe_tower && !config.complete_objects) {
+        const float width_per_extruder = 15.f; // a simple workaround after wipe_tower_per_color_wipe got obsolete
+        volumes.load_wipe_tower_preview(1000, config.wipe_tower_x, config.wipe_tower_y, config.wipe_tower_width, width_per_extruder * (extruders_count - 1), max_z, config.wipe_tower_rotation_angle, use_VBOs);
+    }
 }
 
-}
+} // namespace Slic3r
