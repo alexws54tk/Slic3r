@@ -51,7 +51,8 @@ add_test (NAME integration COMMAND "${PERL_EXECUTABLE}" ${PERL_BIN_PATH}/prove W
 
 install(PROGRAMS slic3r.pl DESTINATION bin RENAME slic3r-prusa3d)
 
-file(GLOB MyVar var/*.png)
-install(FILES ${MyVar} DESTINATION share/slic3r-prusa3d)
+# file(GLOB MyVar resources/*)
+install(DIRECTORY resources/ DESTINATION share/slic3r-prusa3d)
+# install(TARGETS resources DESTINATION share/slic3r-prusa3d)
 install(FILES lib/Slic3r.pm DESTINATION lib/slic3r-prusa3d)
 install(DIRECTORY lib/Slic3r DESTINATION lib/slic3r-prusa3d)
