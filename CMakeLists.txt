@@ -1,5 +1,6 @@
 # Boost 1.63 requires CMake 3.7 or newer
 cmake_minimum_required(VERSION 2.8)
+set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -Wall")
 
 project(Slic3r)
 
@@ -22,7 +23,6 @@ option(SLIC3R_STATIC 			"Compile Slic3r with static libraries (Boost, TBB, glew)
 option(SLIC3R_GUI    			"Compile Slic3r with GUI components (OpenGL, wxWidgets)" 1)
 option(SLIC3R_PRUSACONTROL		"Compile Slic3r with the PrusaControl prject file format (requires wxWidgets base library)" 1)
 option(SLIC3R_PROFILE 			"Compile Slic3r with an invasive Shiny profiler" 0)
-option(SLIC3R_HAS_BROKEN_CROAK 	"Compile Slic3r for a broken Strawberry Perl 64bit" 0)
 option(SLIC3R_MSVC_COMPILE_PARALLEL "Compile on Visual Studio in parallel" 1)
 
 if (MSVC AND SLIC3R_MSVC_COMPILE_PARALLEL)
@@ -47,6 +47,22 @@ find_package(Perl REQUIRED)
 if(NOT DEFINED CMAKE_PREFIX_PATH)
 	if(DEFINED ENV{CMAKE_PREFIX_PATH})
 		set(CMAKE_PREFIX_PATH "$ENV{CMAKE_PREFIX_PATH}")
+	endif()
+endif()
+
+# WIN10SDK_PATH is used to point CMake to the WIN10 SDK installation directory.
+# We pick it from environment if it is not defined in another way
+if(WIN32)
+	if(NOT DEFINED WIN10SDK_PATH)
+		if(DEFINED ENV{WIN10SDK_PATH})
+			set(WIN10SDK_PATH "$ENV{WIN10SDK_PATH}")
+		endif()
+	endif()
+	if(DEFINED WIN10SDK_PATH AND NOT EXISTS "${WIN10SDK_PATH}/include/winrt/windows.graphics.printing3d.h")
+		message("WIN10SDK_PATH is invalid: ${WIN10SDK_PATH}")
+		message("${WIN10SDK_PATH}/include/winrt/windows.graphics.printing3d.h was not found")
+		message("STL fixing by the Netfabb service will not be compiled")
+		unset(WIN10SDK_PATH)
 	endif()
 endif()
 
