@@ -78,35 +78,32 @@ std::string GLCanvas3DManager::GLInfo::to_string(bool format_as_html, bool exten
     std::stringstream out;
 
     std::string h2_start = format_as_html ? "<b>" : "";
-    std::string h2_end   = format_as_html ? "</b>" : "";
-    std::string b_start  = format_as_html ? "<b>" : "";
-    std::string b_end    = format_as_html ? "</b>" : "";
+    std::string h2_end = format_as_html ? "</b>" : "";
+    std::string b_start = format_as_html ? "<b>" : "";
+    std::string b_end = format_as_html ? "</b>" : "";
     std::string line_end = format_as_html ? "<br>" : "\n";
 
     out << h2_start << "OpenGL installation" << h2_end << line_end;
-    out << b_start  << "GL version:   " << b_end << (version.empty() ? "N/A" : version) << line_end;
-    out << b_start  << "Vendor:       " << b_end << (vendor.empty() ? "N/A" : vendor) << line_end;
-    out << b_start  << "Renderer:     " << b_end << (renderer.empty() ? "N/A" : renderer) << line_end;
-    out << b_start  << "GLSL version: " << b_end << (glsl_version.empty() ? "N/A" : glsl_version) << line_end;
+    out << b_start << "GL version:   " << b_end << (version.empty() ? "N/A" : version) << line_end;
+    out << b_start << "Vendor:       " << b_end << (vendor.empty() ? "N/A" : vendor) << line_end;
+    out << b_start << "Renderer:     " << b_end << (renderer.empty() ? "N/A" : renderer) << line_end;
+    out << b_start << "GLSL version: " << b_end << (glsl_version.empty() ? "N/A" : glsl_version) << line_end;
 
     if (extensions)
     {
-        out << h2_start << "Installed extensions:" << h2_end << line_end;
-
         std::vector<std::string> extensions_list;
-        GLint num_extensions;
-        ::glGetIntegerv(GL_NUM_EXTENSIONS, &num_extensions);
-         
-        for (GLint i = 0; i < num_extensions; ++i)
-        {
-            const char* e = (const char*)::glGetStringi(GL_EXTENSIONS, i);
-            extensions_list.push_back(e);
-        }
+        std::string extensions_str = (const char*)::glGetString(GL_EXTENSIONS);
+        boost::split(extensions_list, extensions_str, boost::is_any_of(" "), boost::token_compress_off);
 
-        std::sort(extensions_list.begin(), extensions_list.end());
-        for (const std::string& ext : extensions_list)
+        if (!extensions_list.empty())
         {
-            out << ext << line_end;
+            out << h2_start << "Installed extensions:" << h2_end << line_end;
+
+            std::sort(extensions_list.begin(), extensions_list.end());
+            for (const std::string& ext : extensions_list)
+            {
+                out << ext << line_end;
+            }
         }
     }
 
@@ -240,7 +237,7 @@ void GLCanvas3DManager::update_volumes_selection(wxGLCanvas* canvas, const std::
         it->second->update_volumes_selection(selections);
 }
 
-bool GLCanvas3DManager::check_volumes_outside_state(wxGLCanvas* canvas, const DynamicPrintConfig* config) const
+int GLCanvas3DManager::check_volumes_outside_state(wxGLCanvas* canvas, const DynamicPrintConfig* config) const
 {
     CanvasesMap::const_iterator it = _get_canvas(canvas);
     return (it != m_canvases.end()) ? it->second->check_volumes_outside_state(config) : false;
@@ -421,6 +418,13 @@ void GLCanvas3DManager::enable_force_zoom_to_bed(wxGLCanvas* canvas, bool enable
         it->second->enable_force_zoom_to_bed(enable);
 }
 
+void GLCanvas3DManager::enable_dynamic_background(wxGLCanvas* canvas, bool enable)
+{
+    CanvasesMap::iterator it = _get_canvas(canvas);
+    if (it != m_canvases.end())
+        it->second->enable_dynamic_background(enable);
+}
+
 void GLCanvas3DManager::allow_multisample(wxGLCanvas* canvas, bool allow)
 {
     CanvasesMap::iterator it = _get_canvas(canvas);
@@ -465,6 +469,13 @@ void GLCanvas3DManager::update_volumes_colors_by_extruder(wxGLCanvas* canvas)
     CanvasesMap::const_iterator it = _get_canvas(canvas);
     if (it != m_canvases.end())
         it->second->update_volumes_colors_by_extruder();
+}
+
+void GLCanvas3DManager::update_gizmos_data(wxGLCanvas* canvas)
+{
+    CanvasesMap::const_iterator it = _get_canvas(canvas);
+    if (it != m_canvases.end())
+        it->second->update_gizmos_data();
 }
 
 void GLCanvas3DManager::render(wxGLCanvas* canvas) const
@@ -512,30 +523,6 @@ void GLCanvas3DManager::reload_scene(wxGLCanvas* canvas, bool force)
         it->second->reload_scene(force);
 }
 
-void GLCanvas3DManager::load_print_toolpaths(wxGLCanvas* canvas)
-{
-    CanvasesMap::iterator it = _get_canvas(canvas);
-    if (it != m_canvases.end())
-        it->second->load_print_toolpaths();
-}
-
-void GLCanvas3DManager::load_print_object_toolpaths(wxGLCanvas* canvas, const PrintObject* print_object, const std::vector<std::string>& tool_colors)
-{
-    if (print_object == nullptr)
-        return;
-
-    CanvasesMap::iterator it = _get_canvas(canvas);
-    if (it != m_canvases.end())
-        it->second->load_print_object_toolpaths(*print_object, tool_colors);
-}
-
-void GLCanvas3DManager::load_wipe_tower_toolpaths(wxGLCanvas* canvas, const std::vector<std::string>& str_tool_colors)
-{
-    CanvasesMap::iterator it = _get_canvas(canvas);
-    if (it != m_canvases.end())
-        it->second->load_wipe_tower_toolpaths(str_tool_colors);
-}
-
 void GLCanvas3DManager::load_gcode_preview(wxGLCanvas* canvas, const GCodePreviewData* preview_data, const std::vector<std::string>& str_tool_colors)
 {
     if (preview_data == nullptr)
@@ -544,6 +531,22 @@ void GLCanvas3DManager::load_gcode_preview(wxGLCanvas* canvas, const GCodePrevie
     CanvasesMap::iterator it = _get_canvas(canvas);
     if (it != m_canvases.end())
         it->second->load_gcode_preview(*preview_data, str_tool_colors);
+}
+
+void GLCanvas3DManager::load_preview(wxGLCanvas* canvas, const std::vector<std::string>& str_tool_colors)
+{
+    CanvasesMap::iterator it = _get_canvas(canvas);
+    if (it != m_canvases.end())
+        it->second->load_preview(str_tool_colors);
+}
+
+void GLCanvas3DManager::reset_legend_texture()
+{
+    for (CanvasesMap::value_type& canvas : m_canvases)
+    {
+        if (canvas.second != nullptr)
+            canvas.second->reset_legend_texture();
+    }
 }
 
 void GLCanvas3DManager::register_on_viewport_changed_callback(wxGLCanvas* canvas, void* callback)
@@ -656,6 +659,20 @@ void GLCanvas3DManager::register_on_gizmo_scale_uniformly_callback(wxGLCanvas* c
     CanvasesMap::iterator it = _get_canvas(canvas);
     if (it != m_canvases.end())
         it->second->register_on_gizmo_scale_uniformly_callback(callback);
+}
+
+void GLCanvas3DManager::register_on_gizmo_rotate_callback(wxGLCanvas* canvas, void* callback)
+{
+    CanvasesMap::iterator it = _get_canvas(canvas);
+    if (it != m_canvases.end())
+        it->second->register_on_gizmo_rotate_callback(callback);
+}
+
+void GLCanvas3DManager::register_on_update_geometry_info_callback(wxGLCanvas* canvas, void* callback)
+{
+    CanvasesMap::iterator it = _get_canvas(canvas);
+    if (it != m_canvases.end())
+        it->second->register_on_update_geometry_info_callback(callback);
 }
 
 GLCanvas3DManager::CanvasesMap::iterator GLCanvas3DManager::_get_canvas(wxGLCanvas* canvas)

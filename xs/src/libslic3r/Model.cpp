@@ -14,6 +14,9 @@
 #include <boost/nowide/iostream.hpp>
 #include <boost/algorithm/string/replace.hpp>
 
+#include "SVG.hpp"
+#include <Eigen/Dense>
+
 namespace Slic3r {
 
     unsigned int Model::s_auto_extruder_id = 1;
@@ -315,15 +318,16 @@ bool Model::arrange_objects(coordf_t dist, const BoundingBoxf* bb)
     Pointfs positions;
     if (! _arrange(instance_sizes, dist, bb, positions))
         return false;
-    
-	size_t idx = 0;
-	for (ModelObject *o : this->objects) {
+
+    size_t idx = 0;
+    for (ModelObject *o : this->objects) {
         for (ModelInstance *i : o->instances) {
             i->offset = positions[idx] - instance_centers[idx];
             ++ idx;
         }
         o->invalidate_bounding_box();
     }
+
     return true;
 }
 
@@ -603,10 +607,7 @@ void ModelObject::clear_instances()
 
 // Returns the bounding box of the transformed instances.
 // This bounding box is approximate and not snug.
-//========================================================================================================
 const BoundingBoxf3& ModelObject::bounding_box() const
-//const BoundingBoxf3& ModelObject::bounding_box()
-//========================================================================================================
 {
     if (! m_bounding_box_valid) {
         BoundingBoxf3 raw_bbox;
@@ -770,9 +771,23 @@ void ModelObject::scale(const Pointf3 &versor)
 
 void ModelObject::rotate(float angle, const Axis &axis)
 {
+    float min_z = FLT_MAX;
     for (ModelVolume *v : this->volumes)
+    {
         v->mesh.rotate(angle, axis);
-    this->origin_translation = Pointf3(0,0,0);
+        min_z = std::min(min_z, v->mesh.stl.stats.min.z);
+    }
+
+    if (min_z != 0.0f)
+    {
+        // translate the object so that its minimum z lays on the bed
+        for (ModelVolume *v : this->volumes)
+        {
+            v->mesh.translate(0.0f, 0.0f, -min_z);
+        }
+    }
+
+    this->origin_translation = Pointf3(0, 0, 0);
     this->invalidate_bounding_box();
 }
 
@@ -894,6 +909,59 @@ void ModelObject::split(ModelObjectPtrs* new_objects)
     }
     
     return;
+}
+
+void ModelObject::check_instances_print_volume_state(const BoundingBoxf3& print_volume)
+{
+    for (ModelVolume* vol : this->volumes)
+    {
+        if (!vol->modifier)
+        {
+            for (ModelInstance* inst : this->instances)
+            {
+                BoundingBoxf3 bb;
+
+                double c = cos(inst->rotation);
+                double s = sin(inst->rotation);
+
+                for (int f = 0; f < vol->mesh.stl.stats.number_of_facets; ++f)
+                {
+                    const stl_facet& facet = vol->mesh.stl.facet_start[f];
+
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        // original point
+                        const stl_vertex& v = facet.vertex[i];
+                        Pointf3 p((double)v.x, (double)v.y, (double)v.z);
+
+                        // scale
+                        p.x *= inst->scaling_factor;
+                        p.y *= inst->scaling_factor;
+                        p.z *= inst->scaling_factor;
+
+                        // rotate Z
+                        double x = p.x;
+                        double y = p.y;
+                        p.x = c * x - s * y;
+                        p.y = s * x + c * y;
+
+                        // translate
+                        p.x += inst->offset.x;
+                        p.y += inst->offset.y;
+
+                        bb.merge(p);
+                    }
+                }
+
+                if (print_volume.contains(bb))
+                    inst->print_volume_state = ModelInstance::PVS_Inside;
+                else if (print_volume.intersects(bb))
+                    inst->print_volume_state = ModelInstance::PVS_Partly_Outside;
+                else
+                    inst->print_volume_state = ModelInstance::PVS_Fully_Outside;
+            }
+        }
+    }
 }
 
 void ModelObject::print_info() const
@@ -1048,32 +1116,16 @@ BoundingBoxf3 ModelInstance::transform_mesh_bounding_box(const TriangleMesh* mes
 
 BoundingBoxf3 ModelInstance::transform_bounding_box(const BoundingBoxf3 &bbox, bool dont_translate) const
 {
-    // rotate around mesh origin
-    double c = cos(this->rotation);
-    double s = sin(this->rotation);
-    Pointf3 pts[4] = {
-        bbox.min,
-        bbox.max,
-        Pointf3(bbox.min.x, bbox.max.y, bbox.min.z),
-        Pointf3(bbox.max.x, bbox.min.y, bbox.max.z)
-    };
-    BoundingBoxf3 out;
-    for (int i = 0; i < 4; ++ i) {
-        Pointf3 &v = pts[i];
-        double xold = v.x;
-        double yold = v.y;
-        v.x = float(c * xold - s * yold);
-        v.y = float(s * xold + c * yold);
-        v.x *= this->scaling_factor;
-        v.y *= this->scaling_factor;
-        v.z *= this->scaling_factor;
-        if (! dont_translate) {
-            v.x += this->offset.x;
-            v.y += this->offset.y;
-        }
-        out.merge(v);
-    }
-    return out;
+    Eigen::Transform<float, 3, Eigen::Affine> matrix = Eigen::Transform<float, 3, Eigen::Affine>::Identity();
+    if (!dont_translate)
+        matrix.translate(Eigen::Vector3f((float)offset.x, (float)offset.y, 0.0f));
+
+    matrix.rotate(Eigen::AngleAxisf(rotation, Eigen::Vector3f::UnitZ()));
+    matrix.scale(scaling_factor);
+
+    std::vector<float> m(16, 0.0f);
+    ::memcpy((void*)m.data(), (const void*)matrix.data(), 16 * sizeof(float));
+    return bbox.transformed(m);
 }
 
 void ModelInstance::transform_polygon(Polygon* polygon) const

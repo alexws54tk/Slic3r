@@ -14,7 +14,7 @@
 #include <boost/thread.hpp>
 
 #define SLIC3R_FORK_NAME "Slic3r Prusa Edition"
-#define SLIC3R_VERSION "1.40.1-devel"
+#define SLIC3R_VERSION "1.41.0-beta"
 #define SLIC3R_BUILD "Gentoo"
 
 typedef int32_t coord_t;
