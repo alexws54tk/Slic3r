@@ -5,7 +5,7 @@
 #include "../../libslic3r/Utils.hpp"
 
 #include "slic3r/Utils/Http.hpp"
-#include "slic3r/Utils/OctoPrint.hpp"
+#include "slic3r/Utils/PrintHost.hpp"
 #include "slic3r/Utils/Serial.hpp"
 #include "BonjourDialog.hpp"
 #include "WipeTowerDialog.hpp"
@@ -847,6 +847,7 @@ void TabPrint::build()
 	page = add_options_page(_(L("Support material")), "building.png");
 		optgroup = page->new_optgroup(_(L("Support material")));
 		optgroup->append_single_option_line("support_material");
+		optgroup->append_single_option_line("support_material_auto");
 		optgroup->append_single_option_line("support_material_threshold");
 		optgroup->append_single_option_line("support_material_enforce_layers");
 
@@ -1183,13 +1184,15 @@ void TabPrint::update()
 
 	bool have_raft = m_config->opt_int("raft_layers") > 0;
 	bool have_support_material = m_config->opt_bool("support_material") || have_raft;
+	bool have_support_material_auto = have_support_material && m_config->opt_bool("support_material_auto");
 	bool have_support_interface = m_config->opt_int("support_material_interface_layers") > 0;
 	bool have_support_soluble = have_support_material && m_config->opt_float("support_material_contact_distance") == 0;
-	for (auto el : {"support_material_threshold", "support_material_pattern", "support_material_with_sheath",
+	for (auto el : {"support_material_pattern", "support_material_with_sheath",
 					"support_material_spacing", "support_material_angle", "support_material_interface_layers",
 					"dont_support_bridges", "support_material_extrusion_width", "support_material_contact_distance",
 					"support_material_xy_spacing" })
 		get_field(el)->toggle(have_support_material);
+	get_field("support_material_threshold")->toggle(have_support_material_auto);
 
 	for (auto el : {"support_material_interface_spacing", "support_material_interface_extruder",
 					"support_material_interface_speed", "support_material_interface_contact_loops" })
@@ -1290,7 +1293,9 @@ void TabFilament::build()
 		optgroup->append_line(line);
 
         optgroup = page->new_optgroup(_(L("Toolchange parameters with single extruder MM printers")));
-		optgroup->append_single_option_line("filament_loading_speed");
+		optgroup->append_single_option_line("filament_loading_speed_start");
+        optgroup->append_single_option_line("filament_loading_speed");
+        optgroup->append_single_option_line("filament_unloading_speed_start");
         optgroup->append_single_option_line("filament_unloading_speed");
 		optgroup->append_single_option_line("filament_load_time");
 		optgroup->append_single_option_line("filament_unload_time");
@@ -1521,10 +1526,12 @@ void TabPrinter::build()
 			optgroup->append_line(line);
 		}
 
-		optgroup = page->new_optgroup(_(L("OctoPrint upload")));
+		optgroup = page->new_optgroup(_(L("Printer Host upload")));
 
-		auto octoprint_host_browse = [this, optgroup] (wxWindow* parent) {
-			auto btn = new wxButton(parent, wxID_ANY, _(L(" Browse "))+dots, wxDefaultPosition, wxDefaultSize, wxBU_LEFT);
+		optgroup->append_single_option_line("host_type");
+
+		auto printhost_browse = [this, optgroup] (wxWindow* parent) {
+			auto btn = m_printhost_browse_btn = new wxButton(parent, wxID_ANY, _(L(" Browse "))+dots, wxDefaultPosition, wxDefaultSize, wxBU_LEFT);
 			btn->SetBitmap(wxBitmap(from_u8(Slic3r::var("zoom.png")), wxBITMAP_TYPE_PNG));
 			auto sizer = new wxBoxSizer(wxHORIZONTAL);
 			sizer->Add(btn);
@@ -1532,47 +1539,50 @@ void TabPrinter::build()
 			btn->Bind(wxEVT_BUTTON, [this, parent, optgroup](wxCommandEvent e) {
 				BonjourDialog dialog(parent);
 				if (dialog.show_and_lookup()) {
-					optgroup->set_value("octoprint_host", std::move(dialog.get_selected()), true);
+					optgroup->set_value("print_host", std::move(dialog.get_selected()), true);
 				}
 			});
 
 			return sizer;
 		};
 
-		auto octoprint_host_test = [this](wxWindow* parent) {
-			auto btn = m_octoprint_host_test_btn = new wxButton(parent, wxID_ANY, _(L("Test")), 
+		auto print_host_test = [this](wxWindow* parent) {
+			auto btn = m_print_host_test_btn = new wxButton(parent, wxID_ANY, _(L("Test")), 
 				wxDefaultPosition, wxDefaultSize, wxBU_LEFT | wxBU_EXACTFIT);
 			btn->SetBitmap(wxBitmap(from_u8(Slic3r::var("wrench.png")), wxBITMAP_TYPE_PNG));
 			auto sizer = new wxBoxSizer(wxHORIZONTAL);
 			sizer->Add(btn);
 
 			btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent e) {
-				OctoPrint octoprint(m_config);
-				wxString msg;
-				if (octoprint.test(msg)) {
-					show_info(this, _(L("Connection to OctoPrint works correctly.")), _(L("Success!")));
-				} else {
-					const auto text = wxString::Format("%s: %s\n\n%s",
-						_(L("Could not connect to OctoPrint")), msg, _(L("Note: OctoPrint version at least 1.1.0 is required."))
-					);
+				std::unique_ptr<PrintHost> host(PrintHost::get_print_host(m_config));
+				if (! host) {
+					const auto text = wxString::Format("%s",
+						_(L("Could not get a valid Printer Host reference")));
 					show_error(this, text);
+					return;
+				}
+				wxString msg;
+				if (host->test(msg)) {
+					show_info(this, host->get_test_ok_msg(), _(L("Success!")));
+				} else {
+					show_error(this, host->get_test_failed_msg(msg));
 				}
 			});
 
 			return sizer;
 		};
 
-		Line host_line = optgroup->create_single_option_line("octoprint_host");
-		host_line.append_widget(octoprint_host_browse);
-		host_line.append_widget(octoprint_host_test);
+		Line host_line = optgroup->create_single_option_line("print_host");
+		host_line.append_widget(printhost_browse);
+		host_line.append_widget(print_host_test);
 		optgroup->append_line(host_line);
-		optgroup->append_single_option_line("octoprint_apikey");
+		optgroup->append_single_option_line("printhost_apikey");
 
 		if (Http::ca_file_supported()) {
 
-			Line cafile_line = optgroup->create_single_option_line("octoprint_cafile");
+			Line cafile_line = optgroup->create_single_option_line("printhost_cafile");
 
-			auto octoprint_cafile_browse = [this, optgroup] (wxWindow* parent) {
+			auto printhost_cafile_browse = [this, optgroup] (wxWindow* parent) {
 				auto btn = new wxButton(parent, wxID_ANY, _(L(" Browse "))+dots, wxDefaultPosition, wxDefaultSize, wxBU_LEFT);
 				btn->SetBitmap(wxBitmap(from_u8(Slic3r::var("zoom.png")), wxBITMAP_TYPE_PNG));
 				auto sizer = new wxBoxSizer(wxHORIZONTAL);
@@ -1582,17 +1592,17 @@ void TabPrinter::build()
 					static const auto filemasks = _(L("Certificate files (*.crt, *.pem)|*.crt;*.pem|All files|*.*"));
 					wxFileDialog openFileDialog(this, _(L("Open CA certificate file")), "", "", filemasks, wxFD_OPEN | wxFD_FILE_MUST_EXIST);
 					if (openFileDialog.ShowModal() != wxID_CANCEL) {
-						optgroup->set_value("octoprint_cafile", std::move(openFileDialog.GetPath()), true);
+						optgroup->set_value("printhost_cafile", std::move(openFileDialog.GetPath()), true);
 					}
 				});
 
 				return sizer;
 			};
 
-			cafile_line.append_widget(octoprint_cafile_browse);
+			cafile_line.append_widget(printhost_cafile_browse);
 			optgroup->append_line(cafile_line);
 
-			auto octoprint_cafile_hint = [this, optgroup] (wxWindow* parent) {
+			auto printhost_cafile_hint = [this, optgroup] (wxWindow* parent) {
 				auto txt = new wxStaticText(parent, wxID_ANY, 
 					_(L("HTTPS CA file is optional. It is only needed if you use HTTPS with a self-signed certificate.")));
 				auto sizer = new wxBoxSizer(wxHORIZONTAL);
@@ -1602,7 +1612,7 @@ void TabPrinter::build()
 
 			Line cafile_hint { "", "" };
 			cafile_hint.full_width = 1;
-			cafile_hint.widget = std::move(octoprint_cafile_hint);
+			cafile_hint.widget = std::move(printhost_cafile_hint);
 			optgroup->append_line(cafile_hint);
 
 		}
@@ -1897,8 +1907,12 @@ void TabPrinter::update(){
 			m_serial_test_btn->Disable();
 	}
 
-	m_octoprint_host_test_btn->Enable(!m_config->opt_string("octoprint_host").empty());
-	
+	{
+		std::unique_ptr<PrintHost> host(PrintHost::get_print_host(m_config));
+		m_print_host_test_btn->Enable(!m_config->opt_string("print_host").empty() && host->can_test());
+		m_printhost_browse_btn->Enable(host->has_auto_discovery());
+	}
+
 	bool have_multiple_extruders = m_extruders_count > 1;
 	get_field("toolchange_gcode")->toggle(have_multiple_extruders);
 	get_field("single_extruder_multi_material")->toggle(have_multiple_extruders);

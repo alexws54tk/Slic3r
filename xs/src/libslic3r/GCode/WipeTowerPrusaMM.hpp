@@ -46,7 +46,7 @@ public:
 	WipeTowerPrusaMM(float x, float y, float width, float rotation_angle, float cooling_tube_retraction,
                      float cooling_tube_length, float parking_pos_retraction, float extra_loading_move, float bridging,
                      const std::vector<std::vector<float>>& wiping_matrix, unsigned int initial_tool) :
-		m_wipe_tower_pos(x, y),
+    m_wipe_tower_pos(x, y),
 		m_wipe_tower_width(width),
 		m_wipe_tower_rotation_angle(rotation_angle),
 		m_y_shift(0.f),
@@ -65,9 +65,9 @@ public:
 
 
 	// Set the extruder properties.
-	void set_extruder(size_t idx, material_type material, int temp, int first_layer_temp, float loading_speed,
-                      float unloading_speed, float delay, int cooling_moves, float cooling_initial_speed,
-                      float cooling_final_speed, std::string ramming_parameters, float nozzle_diameter)
+	void set_extruder(size_t idx, material_type material, int temp, int first_layer_temp, float loading_speed, float loading_speed_start,
+                      float unloading_speed, float unloading_speed_start, float delay, int cooling_moves,
+                      float cooling_initial_speed, float cooling_final_speed, std::string ramming_parameters, float nozzle_diameter)
 	{
         //while (m_filpar.size() < idx+1)   // makes sure the required element is in the vector
         m_filpar.push_back(FilamentParameters());
@@ -76,7 +76,9 @@ public:
         m_filpar[idx].temperature = temp;
         m_filpar[idx].first_layer_temperature = first_layer_temp;
         m_filpar[idx].loading_speed = loading_speed;
+        m_filpar[idx].loading_speed_start = loading_speed_start;
         m_filpar[idx].unloading_speed = unloading_speed;
+        m_filpar[idx].unloading_speed_start = unloading_speed_start;
         m_filpar[idx].delay = delay;
         m_filpar[idx].cooling_moves = cooling_moves;
         m_filpar[idx].cooling_initial_speed = cooling_initial_speed;
@@ -92,6 +94,8 @@ public:
         m_filpar[idx].ramming_step_multiplicator /= 100;
         while (stream >> speed)
             m_filpar[idx].ramming_speed.push_back(speed);
+
+        m_used_filament_length.resize(std::max(m_used_filament_length.size(), idx + 1)); // makes sure that the vector is big enough so we don't have to check later
 	}
 
 
@@ -170,6 +174,9 @@ public:
 		return ( (m_is_first_layer ? m_wipe_tower_depth - m_perimeter_width : m_layer_info->depth) - WT_EPSILON < m_depth_traversed);
 	}
 
+    virtual std::vector<float> get_used_filament() const override { return m_used_filament_length; }
+    virtual int get_number_of_toolchanges() const override { return m_num_tool_changes; }
+
 
 private:
 	WipeTowerPrusaMM();
@@ -216,7 +223,9 @@ private:
         int  			    temperature = 0;
         int  			    first_layer_temperature = 0;
         float               loading_speed = 0.f;
+        float               loading_speed_start = 0.f;
         float               unloading_speed = 0.f;
+        float               unloading_speed_start = 0.f;
         float               delay = 0.f ;
         int                 cooling_moves = 0;
         float               cooling_initial_speed = 0.f;
@@ -326,6 +335,9 @@ private:
 
 	std::vector<WipeTowerInfo> m_plan; 	// Stores information about all layers and toolchanges for the future wipe tower (filled by plan_toolchange(...))
 	std::vector<WipeTowerInfo>::iterator m_layer_info = m_plan.end();
+
+    // Stores information about used filament length per extruder:
+    std::vector<float> m_used_filament_length;
 
 
 	// Returns gcode for wipe tower brim

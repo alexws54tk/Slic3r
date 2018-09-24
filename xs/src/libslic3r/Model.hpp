@@ -105,9 +105,6 @@ public:
     // This bounding box is being cached.
     const BoundingBoxf3& bounding_box() const;
     void invalidate_bounding_box() { m_bounding_box_valid = false; }
-    // Returns a snug bounding box of the transformed instances.
-    // This bounding box is not being cached.
-    BoundingBoxf3 tight_bounding_box(bool include_modifiers) const;
 
     // A mesh containing all transformed instances of this object.
     TriangleMesh mesh() const;
@@ -123,7 +120,7 @@ public:
     void translate(const Vectorf3 &vector) { this->translate(vector.x, vector.y, vector.z); }
     void translate(coordf_t x, coordf_t y, coordf_t z);
     void scale(const Pointf3 &versor);
-    void rotate(float angle, const Axis &axis);
+    void rotate(float angle, const Pointf3& axis);
     void transform(const float* matrix3x4);
     void mirror(const Axis &axis);
     size_t materials_count() const;
@@ -157,6 +154,10 @@ private:
 class ModelVolume
 {
     friend class ModelObject;
+
+    // The convex hull of this model's mesh.
+    TriangleMesh m_convex_hull;
+
 public:
     std::string name;
     // The triangular model.
@@ -164,15 +165,27 @@ public:
     // Configuration parameters specific to an object model geometry or a modifier volume, 
     // overriding the global Slic3r settings and the ModelObject settings.
     DynamicPrintConfig config;
-    // Is it an object to be printed, or a modifier volume?
-    bool modifier;
-    
+
+    enum Type {
+        MODEL_TYPE_INVALID = -1,
+        MODEL_PART = 0,
+        PARAMETER_MODIFIER,
+        SUPPORT_ENFORCER,
+        SUPPORT_BLOCKER,
+    };
+
     // A parent object owning this modifier volume.
-    ModelObject* get_object() const { return this->object; };
+    ModelObject*        get_object() const { return this->object; };
+    Type                type() const { return m_type; }
+    void                set_type(const Type t) { m_type = t; }
+    bool                is_model_part()         const { return m_type == MODEL_PART; }
+    bool                is_modifier()           const { return m_type == PARAMETER_MODIFIER; }
+    bool                is_support_enforcer()   const { return m_type == SUPPORT_ENFORCER; }
+    bool                is_support_blocker()    const { return m_type == SUPPORT_BLOCKER; }
     t_model_material_id material_id() const { return this->_material_id; }
-    void material_id(t_model_material_id material_id);
-    ModelMaterial* material() const;
-    void set_material(t_model_material_id material_id, const ModelMaterial &material);
+    void                material_id(t_model_material_id material_id);
+    ModelMaterial*      material() const;
+    void                set_material(t_model_material_id material_id, const ModelMaterial &material);
     // Split this volume, append the result to the object owning this volume.
     // Return the number of volumes created from this one.
     // This is useful to assign different materials to different volumes of an object.
@@ -180,19 +193,38 @@ public:
 
     ModelMaterial* assign_unique_material();
     
+    void calculate_convex_hull();
+    const TriangleMesh& get_convex_hull() const;
+
+    // Helpers for loading / storing into AMF / 3MF files.
+    static Type         type_from_string(const std::string &s);
+    static std::string  type_to_string(const Type t);
+
 private:
     // Parent object owning this ModelVolume.
-    ModelObject* object;
-    t_model_material_id _material_id;
+    ModelObject*            object;
+    // Is it an object to be printed, or a modifier volume?
+    Type                    m_type;
+    t_model_material_id     _material_id;
     
-    ModelVolume(ModelObject *object, const TriangleMesh &mesh) : mesh(mesh), modifier(false), object(object) {}
-    ModelVolume(ModelObject *object, TriangleMesh &&mesh) : mesh(std::move(mesh)), modifier(false), object(object) {}
-    ModelVolume(ModelObject *object, const ModelVolume &other) : 
-        name(other.name), mesh(other.mesh), config(other.config), modifier(other.modifier), object(object)
-        { this->material_id(other.material_id()); }
-    ModelVolume(ModelObject *object, const ModelVolume &other, const TriangleMesh &&mesh) : 
-        name(other.name), mesh(std::move(mesh)), config(other.config), modifier(other.modifier), object(object)
-        { this->material_id(other.material_id()); }
+    ModelVolume(ModelObject *object, const TriangleMesh &mesh) : mesh(mesh), m_type(MODEL_PART), object(object)
+    {
+        if (mesh.stl.stats.number_of_facets > 1)
+            calculate_convex_hull();
+    }
+    ModelVolume(ModelObject *object, TriangleMesh &&mesh, TriangleMesh &&convex_hull) : mesh(std::move(mesh)), m_convex_hull(std::move(convex_hull)), m_type(MODEL_PART), object(object) {}
+    ModelVolume(ModelObject *object, const ModelVolume &other) :
+        name(other.name), mesh(other.mesh), m_convex_hull(other.m_convex_hull), config(other.config), m_type(other.m_type), object(object)
+    {
+        this->material_id(other.material_id());
+    }
+    ModelVolume(ModelObject *object, const ModelVolume &other, const TriangleMesh &&mesh) :
+        name(other.name), mesh(std::move(mesh)), config(other.config), m_type(other.m_type), object(object)
+    {
+        this->material_id(other.material_id());
+        if (mesh.stl.stats.number_of_facets > 1)
+            calculate_convex_hull();
+    }
 };
 
 // A single instance of a ModelObject.
@@ -285,8 +317,6 @@ public:
     bool add_default_instances();
     // Returns approximate axis aligned bounding box of this model
     BoundingBoxf3 bounding_box() const;
-    // Returns tight axis aligned bounding box of this model
-    BoundingBoxf3 transformed_bounding_box() const;
     void center_instances_around_point(const Pointf &point);
     void translate(coordf_t x, coordf_t y, coordf_t z) { for (ModelObject *o : this->objects) o->translate(x, y, z); }
     TriangleMesh mesh() const;

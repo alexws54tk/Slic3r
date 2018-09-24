@@ -27,6 +27,10 @@ enum GCodeFlavor {
     gcfSmoothie, gcfNoExtrusion,
 };
 
+enum PrintHostType {
+    htOctoPrint, htDuet,
+};
+
 enum InfillPattern {
     ipRectilinear, ipGrid, ipTriangles, ipStars, ipCubic, ipLine, ipConcentric, ipHoneycomb, ip3DHoneycomb,
     ipGyroid, ipHilbertCurve, ipArchimedeanChords, ipOctagramSpiral,
@@ -57,6 +61,15 @@ template<> inline t_config_enum_values& ConfigOptionEnum<GCodeFlavor>::get_enum_
         keys_map["mach3"]           = gcfMach3;
         keys_map["machinekit"]      = gcfMachinekit;
         keys_map["no-extrusion"]    = gcfNoExtrusion;
+    }
+    return keys_map;
+}
+
+template<> inline t_config_enum_values& ConfigOptionEnum<PrintHostType>::get_enum_values() {
+    static t_config_enum_values keys_map;
+    if (keys_map.empty()) {
+        keys_map["octoprint"]       = htOctoPrint;
+        keys_map["duet"]            = htDuet;
     }
     return keys_map;
 }
@@ -310,6 +323,7 @@ public:
     ConfigOptionFloatOrPercent      extrusion_width;
     ConfigOptionFloatOrPercent      first_layer_height;
     ConfigOptionBool                infill_only_where_needed;
+    // Force the generation of solid shells between adjacent materials/volumes.
     ConfigOptionBool                interface_shells;
     ConfigOptionFloat               layer_height;
     ConfigOptionInt                 raft_layers;
@@ -317,6 +331,9 @@ public:
 //    ConfigOptionFloat               seam_preferred_direction;
 //    ConfigOptionFloat               seam_preferred_direction_jitter;
     ConfigOptionBool                support_material;
+    // Automatic supports (generated based on support_material_threshold).
+    ConfigOptionBool                support_material_auto;
+    // Direction of the support pattern (in XY plane).
     ConfigOptionFloat               support_material_angle;
     ConfigOptionBool                support_material_buildplate_only;
     ConfigOptionFloat               support_material_contact_distance;
@@ -326,12 +343,15 @@ public:
     ConfigOptionBool                support_material_interface_contact_loops;
     ConfigOptionInt                 support_material_interface_extruder;
     ConfigOptionInt                 support_material_interface_layers;
+    // Spacing between interface lines (the hatching distance). Set zero to get a solid interface.
     ConfigOptionFloat               support_material_interface_spacing;
     ConfigOptionFloatOrPercent      support_material_interface_speed;
     ConfigOptionEnum<SupportMaterialPattern> support_material_pattern;
+    // Spacing between support material lines (the hatching distance).
     ConfigOptionFloat               support_material_spacing;
     ConfigOptionFloat               support_material_speed;
     ConfigOptionBool                support_material_synchronize_layers;
+    // Overhang angle threshold.
     ConfigOptionInt                 support_material_threshold;
     ConfigOptionBool                support_material_with_sheath;
     ConfigOptionFloatOrPercent      support_material_xy_spacing;
@@ -354,6 +374,7 @@ protected:
 //        OPT_PTR(seam_preferred_direction);
 //        OPT_PTR(seam_preferred_direction_jitter);
         OPT_PTR(support_material);
+        OPT_PTR(support_material_auto);
         OPT_PTR(support_material_angle);
         OPT_PTR(support_material_buildplate_only);
         OPT_PTR(support_material_contact_distance);
@@ -401,10 +422,12 @@ public:
     ConfigOptionInt                 infill_every_layers;
     ConfigOptionFloatOrPercent      infill_overlap;
     ConfigOptionFloat               infill_speed;
+    // Detect bridging perimeters
     ConfigOptionBool                overhangs;
     ConfigOptionInt                 perimeter_extruder;
     ConfigOptionFloatOrPercent      perimeter_extrusion_width;
     ConfigOptionFloat               perimeter_speed;
+    // Total number of perimeters.
     ConfigOptionInt                 perimeters;
     ConfigOptionFloatOrPercent      small_perimeter_speed;
     ConfigOptionFloat               solid_infill_below_area;
@@ -412,6 +435,7 @@ public:
     ConfigOptionFloatOrPercent      solid_infill_extrusion_width;
     ConfigOptionInt                 solid_infill_every_layers;
     ConfigOptionFloatOrPercent      solid_infill_speed;
+    // Detect thin walls.
     ConfigOptionBool                thin_walls;
     ConfigOptionFloatOrPercent      top_infill_extrusion_width;
     ConfigOptionInt                 top_solid_layers;
@@ -528,8 +552,10 @@ public:
     ConfigOptionFloats              filament_cost;
     ConfigOptionFloats              filament_max_volumetric_speed;
     ConfigOptionFloats              filament_loading_speed;
+    ConfigOptionFloats              filament_loading_speed_start;
     ConfigOptionFloats              filament_load_time;
     ConfigOptionFloats              filament_unloading_speed;
+    ConfigOptionFloats              filament_unloading_speed_start;
     ConfigOptionFloats              filament_toolchange_delay;
     ConfigOptionFloats              filament_unload_time;
     ConfigOptionInts                filament_cooling_moves;
@@ -594,8 +620,10 @@ protected:
         OPT_PTR(filament_cost);
         OPT_PTR(filament_max_volumetric_speed);
         OPT_PTR(filament_loading_speed);
+        OPT_PTR(filament_loading_speed_start);
         OPT_PTR(filament_load_time);
         OPT_PTR(filament_unloading_speed);
+        OPT_PTR(filament_unloading_speed_start);
         OPT_PTR(filament_unload_time);
         OPT_PTR(filament_toolchange_delay);
         OPT_PTR(filament_cooling_moves);
@@ -789,18 +817,20 @@ class HostConfig : public StaticPrintConfig
 {
     STATIC_PRINT_CONFIG_CACHE(HostConfig)
 public:
-    ConfigOptionString              octoprint_host;
-    ConfigOptionString              octoprint_apikey;
-    ConfigOptionString              octoprint_cafile;
+    ConfigOptionEnum<PrintHostType> host_type;
+    ConfigOptionString              print_host;
+    ConfigOptionString              printhost_apikey;
+    ConfigOptionString              printhost_cafile;
     ConfigOptionString              serial_port;
     ConfigOptionInt                 serial_speed;
     
 protected:
     void initialize(StaticCacheBase &cache, const char *base_ptr)
     {
-        OPT_PTR(octoprint_host);
-        OPT_PTR(octoprint_apikey);
-        OPT_PTR(octoprint_cafile);
+        OPT_PTR(host_type);
+        OPT_PTR(print_host);
+        OPT_PTR(printhost_apikey);
+        OPT_PTR(printhost_cafile);
         OPT_PTR(serial_port);
         OPT_PTR(serial_speed);
     }

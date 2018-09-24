@@ -200,7 +200,9 @@ bool Print::invalidate_state_by_config_options(const std::vector<t_config_option
             || opt_key == "filament_soluble"
             || opt_key == "first_layer_temperature"
             || opt_key == "filament_loading_speed"
+            || opt_key == "filament_loading_speed_start"
             || opt_key == "filament_unloading_speed"
+            || opt_key == "filament_unloading_speed_start"
             || opt_key == "filament_toolchange_delay"
             || opt_key == "filament_cooling_moves"
             || opt_key == "filament_minimal_purge_on_wipe_tower"
@@ -360,9 +362,12 @@ void Print::add_model_object(ModelObject* model_object, int idx)
     // Invalidate all print steps.
     this->invalidate_all_steps();
 
-    for (size_t volume_id = 0; volume_id < model_object->volumes.size(); ++ volume_id) {
+    size_t volume_id = 0;
+    for (const ModelVolume *volume : model_object->volumes) {
+        if (! volume->is_model_part() && ! volume->is_modifier())
+            continue;
         // Get the config applied to this volume.
-        PrintRegionConfig config = this->_region_config_from_model_volume(*model_object->volumes[volume_id]);
+        PrintRegionConfig config = this->_region_config_from_model_volume(*volume);
         // Find an existing print region with the same config.
         size_t region_id = size_t(-1);
         for (size_t i = 0; i < this->regions.size(); ++ i)
@@ -377,6 +382,7 @@ void Print::add_model_object(ModelObject* model_object, int idx)
         }
         // Assign volume to a region.
         object->add_region_volume(region_id, volume_id);
+        ++ volume_id;
     }
 
     // Apply config to print object.
@@ -851,7 +857,7 @@ void Print::auto_assign_extruders(ModelObject* model_object) const
     for (size_t volume_id = 0; volume_id < model_object->volumes.size(); ++ volume_id) {
         ModelVolume *volume = model_object->volumes[volume_id];
         //FIXME Vojtech: This assigns an extruder ID even to a modifier volume, if it has a material assigned.
-        if (! volume->material_id().empty() && ! volume->config.has("extruder"))
+        if ((volume->is_model_part() || volume->is_modifier()) && ! volume->material_id().empty() && ! volume->config.has("extruder"))
             volume->config.opt<ConfigOptionInt>("extruder", true)->value = int(volume_id + 1);
     }
 }
@@ -1123,7 +1129,9 @@ void Print::_make_wipe_tower()
             this->config.temperature.get_at(i),
             this->config.first_layer_temperature.get_at(i),
             this->config.filament_loading_speed.get_at(i),
+            this->config.filament_loading_speed_start.get_at(i),
             this->config.filament_unloading_speed.get_at(i),
+            this->config.filament_unloading_speed_start.get_at(i),
             this->config.filament_toolchange_delay.get_at(i),
             this->config.filament_cooling_moves.get_at(i),
             this->config.filament_cooling_initial_speed.get_at(i),
@@ -1189,6 +1197,9 @@ void Print::_make_wipe_tower()
     }
     m_wipe_tower_final_purge = Slic3r::make_unique<WipeTower::ToolChangeResult>(
 		wipe_tower.tool_change((unsigned int)-1, false));
+
+    m_wipe_tower_used_filament = wipe_tower.get_used_filament();
+    m_wipe_tower_number_of_toolchanges = wipe_tower.get_number_of_toolchanges();
 }
 
 std::string Print::output_filename()
