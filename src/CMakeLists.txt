@@ -111,3 +111,17 @@ if (SLIC3R_GUI)
         target_link_libraries(slic3r -ldl -lGL -lGLU)
     endif ()
 endif ()
+
+# Link the resources dir to where Slic3r GUI expects it
+if (MSVC)
+    file(TO_NATIVE_PATH "${CMAKE_CURRENT_BINARY_DIR}/resources" WIN_RESOURCES_SYMLINK)
+    add_custom_target(resources_symlink ALL
+        COMMAND if not exist "${WIN_RESOURCES_SYMLINK}" ( mklink /J "${WIN_RESOURCES_SYMLINK}" "${SLIC3R_RESOURCES_DIR_WIN}" )
+        VERBATIM
+    )
+else ()
+    add_custom_target(resources_symlink ALL
+        COMMAND ln -sf "${SLIC3R_RESOURCES_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/../resources"
+        VERBATIM
+    )
+endif()
